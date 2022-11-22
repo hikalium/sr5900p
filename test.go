@@ -149,10 +149,19 @@ func testPrint(config *TestConfig) error {
 		0x1b, 0x2e, 0x00, 0x0a, 0x0a, 0x01, 0x90, 0x00,
 	}
 	message_body := header
-	for i := 0; i < 226; i++ {
-		content_line := make([]byte, 18)
-		for j := 0; j < len(content_line); j++ {
-			content_line[j] = byte(i % 256)
+	for y := 0; y < 226; y++ {
+		content_line := make([]byte, 34)
+		for i := 0; i < len(content_line); i++ {
+			chunk := 0
+			for k := 0; k < 8; k++ {
+				x := i*8 + k
+				t := x + y
+				if t%32 == 0 {
+					chunk = chunk | 7
+				}
+				chunk = chunk << 1
+			}
+			content_line[i] = byte(chunk)
 		}
 		line := append(header_per_line, content_line...)
 		message_body = append(message_body, line...)
