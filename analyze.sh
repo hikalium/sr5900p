@@ -1,10 +1,10 @@
-echo "datasize"
-find ./*.bin | xargs -I {} -- ./analyze_datasize.sh {}
 echo "dataheader"
 find ./*.bin | xargs -I {} -- ./analyze_dataheader.sh {}
 exit
 echo "UDP"
 find ./*.bin | xargs -I {} -- ./analyze_udp.sh {}
+echo "datasize"
+find ./*.bin | xargs -I {} -- ./analyze_datasize.sh {}
 echo "terminator"
 find ./*.bin | xargs -I {} -- ./analyze_terminator.sh {}
 echo "line header"
