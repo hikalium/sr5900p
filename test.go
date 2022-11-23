@@ -29,7 +29,7 @@ func getConfig() (*TestConfig, error) {
 }
 
 var requestDefinitions = map[string][]byte{
-	"request01": {
+	"get_tape_info": {
 		0x54, 0x50, 0x52, 0x54, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x20,
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
@@ -40,7 +40,7 @@ var requestDefinitions = map[string][]byte{
 	// 00000020  14 00 00 05 00 00 00 00  40 00 00 00 00 01 00 00  |........@.......|
 	// 00000030  00 00 00 00                                       |....|
 
-	"request02": {
+	"print_start": {
 		0x54, 0x50, 0x52, 0x54, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x20,
 		0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
@@ -84,7 +84,7 @@ var requestDefinitions = map[string][]byte{
 	// 00000050  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
 }
 
-func testUDPMessage(config *TestConfig, key string) {
+func testUDPMessage(config *TestConfig, key string) []byte {
 	conn, err := net.Dial("udp4", config.RemoteIpAddr+":9100")
 	if err != nil {
 		log.Fatal(err)
@@ -102,6 +102,7 @@ func testUDPMessage(config *TestConfig, key string) {
 	}
 	fmt.Printf("%s", hex.Dump(buffer[:length]))
 	//fmt.Println(hex.EncodeToString(buffer[:length]))
+	return buffer[:length]
 }
 
 // [header (66 bytes)] ([separator (10 bytes)][data(34 bytes)])*435(0x1b3) [terminator(7 bytes)]
@@ -126,30 +127,26 @@ func testUDPMessage(config *TestConfig, key string) {
 // terminator (7 bytes)
 //		0c 1b 7b 03 40407d
 
+var header = []byte{
+	0x1b, 0x7b, 0x07, 0x43, 0x02, 0x02, 0x01, 0x01, 0x49, 0x7d,
+	0x1b, 0x7b, 0x04, 0x44, 0x05, 0x49, 0x7d,
+	0x1b, 0x7b, 0x05, 0x6c, 0x05, 0x05, 0x76, 0x7d,
+	0x1b, 0x7b, 0x04, 0x73, 0x00, 0x73, 0x7d,
+	0x1b, 0x7b, 0x03, 0x47, 0x47, 0x7d,
+	0x1b, 0x7b, 0x07, 0x4c, 0xe2, 0x00, 0x00, 0x00, 0x2e, 0x7d, // [4..8]: len?
+	0x1b, 0x7b, 0x05, 0x54, 0x40, 0x00, 0x94, 0x7d,
+}
+
+var header_per_line = []byte{
+	0x1b, 0x2e, 0x00, 0x0a, 0x0a, 0x01, 0x90, 0x00,
+}
+
 func testPrint(config *TestConfig) error {
-	// 1b7b074302020101497d1b7b044405497d1b7b056c0505767d1b7b047300737d1b7b0347477d1b7b074c e20000002e7d1b7b05544000947d # length = 0xE1
-	// 1b7b074302020101497d1b7b044405497d1b7b056c0505767d1b7b047300737d1b7b0347477d1b7b074c 2f0200007d7d1b7b05543200867d # length = 0x22E
-	header_common := []byte{
-		0x1b, 0x7b, 0x07, 0x43, 0x02, 0x02, 0x01, 0x01,
-		0x49, 0x7d, 0x1b, 0x7b, 0x04, 0x44, 0x05, 0x49,
-		0x7d, 0x1b, 0x7b, 0x05, 0x6c, 0x05, 0x05, 0x76,
-		0x7d, 0x1b, 0x7b, 0x04, 0x73, 0x00, 0x73, 0x7d,
-		0x1b, 0x7b, 0x03, 0x47, 0x47, 0x7d, 0x1b, 0x7b,
-		0x07, 0x4c,
-	}
-	header_variable := []byte{
-		0xe2, 0x00, 0x00, 0x00, 0x2e, 0x7d, 0x1b, 0x7b,
-		0x05, 0x54, 0x40, 0x00, 0x94, 0x7d,
-	}
-	header := append(header_common, header_variable...)
 	if len(header) != 56 {
 		return fmt.Errorf("Header length MUST be 56 Bytes")
 	}
-	header_per_line := []byte{
-		0x1b, 0x2e, 0x00, 0x0a, 0x0a, 0x01, 0x90, 0x00,
-	}
 	message_body := header
-	for y := 0; y < 226; y++ {
+	for y := 0; y < 0xe2; y++ {
 		content_line := make([]byte, 34)
 		for i := 0; i < len(content_line); i++ {
 			chunk := 0
@@ -157,7 +154,7 @@ func testPrint(config *TestConfig) error {
 				x := i*8 + k
 				t := x + y
 				if t%32 == 0 {
-					chunk = chunk | 7
+					chunk = chunk | 15
 				}
 				chunk = chunk << 1
 			}
@@ -182,12 +179,72 @@ func testPrint(config *TestConfig) error {
 	return nil
 }
 
+func do_print(config *TestConfig) {
+	testUDPMessage(config, "print_start")
+	testPrint(config)
+}
+
+func get_tape_width(config *TestConfig) {
+	res := testUDPMessage(config, "get_tape_info")
+	expected := []byte{
+		0x74, 0x70, 0x72, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x20,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x14, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+	}
+	fmt.Printf("%s", hex.Dump(res))
+	for i := 0; i < len(expected); i++ {
+		if i == 0x22 || i == 0x23 || i == 0x25 {
+			continue
+		}
+		if res[i] != expected[i] {
+			log.Fatalf("Unexpected byte at index 0x%x: expected %v but got 0x%02x", i, expected[i], res[i])
+		}
+	}
+
+	index := 0x22
+	if res[index] == 0x06 {
+		log.Fatal("No tape!")
+	}
+	if res[index] == 0x21 {
+		log.Fatal("Cover is open")
+	}
+	if res[index] != 0x00 {
+		log.Fatalf("Unexpected byte at index 0x%02x: expected 0x00 or 0x06 but got 0x%02x", index, res[index])
+	}
+
+	index = 0x25
+	if res[index] == 0x80 {
+		log.Fatal("Cover is open!")
+	}
+	if res[index] != 0x00 {
+		log.Fatalf("Unexpected byte at index 0x%02x: expected 0x00 or 0x06 but got 0x%02x", index, res[index])
+	}
+
+	index = 0x23
+	tape_index := res[index]
+	if tape_index == 0x01 {
+		fmt.Printf("Tape width = 6mm (tape_index = 0x%02x)\n", tape_index)
+	} else if tape_index == 0x02 {
+		fmt.Printf("Tape width = 9mm (tape_index = 0x%02x)\n", tape_index)
+	} else if tape_index == 0x03 {
+		fmt.Printf("Tape width = 12mm (tape_index = 0x%02x)\n", tape_index)
+	} else if tape_index == 0x04 {
+		fmt.Printf("Tape width = 18mm (tape_index = 0x%02x)\n", tape_index)
+	} else if tape_index == 0x05 {
+		fmt.Printf("Tape width = 24mm (tape_index = 0x%02x)\n", tape_index)
+	} else if tape_index == 0x06 {
+		fmt.Printf("Tape width = 36mm (tape_index = 0x%02x)\n", tape_index)
+	} else {
+		log.Fatalf("Unknown Tape width index: 0x%x\n", tape_index)
+	}
+}
+
 func main() {
 	config, err := getConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
-	//testUDPMessage(config, "request04")
-	testUDPMessage(config, "request02")
-	testPrint(config)
+	//do_print(config)
+	get_tape_width(config)
 }
