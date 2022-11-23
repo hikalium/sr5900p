@@ -1,3 +1,5 @@
+echo "datasize"
+find ./*.bin | xargs -I {} -- ./analyze_datasize.sh {}
 echo "dataheader"
 find ./*.bin | xargs -I {} -- ./analyze_dataheader.sh {}
 exit

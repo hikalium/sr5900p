@@ -145,49 +145,55 @@ var header_common = []byte{
 	0x1b, 0x7b, 0x05, 0x6c, 0x05, 0x05, 0x76, 0x7d,
 }
 
+var header_print_size = []byte{
+	0x1b, 0x7b, 0x07, 0x4c, 0x4c, 0xa9, 0x01, 0x00, 0x00, 0xf6, 0x7d, 0x1b, 0x7b, 0x05, 0x54, 0x91, 0x00, 0xe5, 0x7d,
+}
+
 /*
 1b 7b 07 4c 4c __ __ 00 00 __ 7d 1b 7b 05 54 __ 00 __ 7d common
            L = a9 01       f6 = 30mm
            L = 35 02       83 = 40mm
            L = c1 02       0f = 50mm
+           L = 07 03       56 = 55mm
+           L = 52 03       a1 = 60mm
+           L = 5c 03       ab = 61mm
+           L = 6b 03       ba = 62mm
            L = 87 05       d8 = 100mm
            L = 13 06       65 = 110mm
            L = a4 06       f6 = 120mm
                                              91    e5    ./dump_W12mm_L110mm.bin
                                              91    e5    ./dump_W12mm_L50mm.bin
+                                             91    e5    // W=12mm L=50mm
+
                                              92    e6    ./dump_W12mm_L100mm.bin
                                              92    e6    ./dump_W12mm_L40mm.bin
+                                             92    e6    // W=12mm L=40mm
+
                                              93    e7    ./dump_W12mm_L120mm.bin
                                              93    e7    ./dump_W12mm_L30mm.bin
+                                             93    e7    // W=12mm L=30mm
+
                                              94    e8    ./dump_W18mm_L50mm.bin
+                                             94    e8    // W=18mm L=50mm
+
                                              95    e9    ./dump_W18mm_L40mm.bin
+                                             95    e9    // W=18mm L=40mm
+
                                              96    ea    ./dump_W18mm_L30mm.bin
                                              96    ea    ./dump_W18mm_L30mm_2.bin
                                              96    ea    ./dump_W24mm_L110mm.bin
                                              96    ea    ./dump_W24mm_L110mm_2.bin
-*/
-var header_print_size = []byte{
-	// Tape Length
-	//0x1b, 0x7b, 0x07, // common
-	//
-	//0x4c, 0xa9, 0x01, 0x00, 0x00, 0x00, 0x7d, // L=30mm
-	//0x4c, 0x35, 0x02, 0x00, 0x00, 0x00, 0x7d, // L=40mm
-	//0x4c, 0x35, 0x00, 0x00, 0x00, 0x00, 0x7d,
-	// 4c AA AA 00 00 00 7d
-	//    AA AA = L [mm] * 25.4 / 360 = length in px
-	//               (BB, L) = (216, 100), (15,50), (131, 40)
-	// 0x4c, 0x35, 0x02, 0x00, 0x00, 0x83, 0x7d, // L=40mm
-	// 4c c10200000f 7d for L=50mm
+                                             96    ea    ./dump_a_T24mm_W24mm_L62mm.bin
+                                             96    ea    ./dump_ab_T24mm_W24mm_L50mm.bin
+                                             96    ea    ./dump_ab_T24mm_W24mm_L55mm.bin
+                                             96    ea    ./dump_ab_T24mm_W24mm_L61mm.bin
+                                             96    ea    ./dump_abc_T24mm_W24mm_L61mm.bin
+                                             96    ea    ./dump_abc_T24mm_W24mm_L62mm.bin
+                                             96    ea    // W=18mm L=30mm
 
-	// ????
-	0x1b, 0x7b, 0x05,
-	//0x54, 0x96, 0x00, 0xea, 0x7d, // W=18mm, L=30mm
-	// 0x54, 0x95, 0x00, 0xe9, 0x7d, // W=18mm, L=40mm
-	// 0x54, 0x94, 0x00, 0xe8, 0x7d, // W=18mm, L=50mm
-	//0x54, 0x93, 0x00, 0xe7, 0x7d, // W=12mm, L=30mm
-	// 0x54, 0x92, 0x00, 0xe6, 0x7d, // W=12mm, L=40mm
-	0x54, 0x91, 0x00, 0xe5, 0x7d, // W=12mm, L=50mm
-}
+                                             98    ec    ./dump_ab_T24mm_W24mm_L60mm.bin
+                                             XX    YY    XX + 0x54 == YY
+*/
 
 // 360dpi =>
 // px = mm/25.4*360
@@ -198,16 +204,16 @@ var header_print_size = []byte{
 
 var header_per_line = []byte{
 	// 1b2e00000001 [width_in_px: u16]
-	0x1b, 0x2e, 0x00, 0x00, 0x00, 0x01, 0x1d, 0x01,
+	0x1b, 0x2e, 0x00, 0x00, 0x00, 0x01, 0x1d, 0x01, // 285px == ~20mm, for 24mm tape
+	// 18mm : 1b2e 0000 0001 d700
+	// 12mm : 1b2e 000a 0a0a 9000 << ???
 }
+
 var termination = []byte{
 	// constant
 	0x0c,
 	0x1b, 0x7b, 0x03, 0x40, 0x40, 0x7d,
 }
-
-// 18mm : 1b2e 0000 0001 d700
-// 12mm : 1b2e 000a 0a0a 9000
 
 func testPrint(config *TestConfig) error {
 	w_px := 384
