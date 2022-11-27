@@ -238,8 +238,8 @@ fn notify_data_stream(socket: &UdpSocket, device_ip: &str) -> Result<()> {
     Ok(())
 }
 
-fn do_analyze(_dump_file: &str) -> Result<()> {
-    let label_data = fs::read("sample_tcp_data.bin")?;
+fn do_analyze(dump_file: &str) -> Result<()> {
+    let label_data = fs::read(dump_file)?;
     println!("Size: {}", label_data.len());
     let mut i = 0;
     while i < label_data.len() {
