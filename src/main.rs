@@ -343,46 +343,48 @@ struct PrintArgs {
     #[argh(option)]
     printer: String,
 }
+fn print_tcp_data(device_ip: &str, data: &[u8]) -> Result<()> {
+    let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
+    let info = StatusRequest::send(&socket, device_ip)?;
+    println!("{:?}", info);
+    if let PrinterStatus::SomeTape(t) = info {
+        println!("Tape is {:?}, start printing...", t);
+    } else {
+        println!("Unexpected state. Aborting...");
+        std::process::exit(1);
+    }
+    StartPrintRequest::send(&socket, device_ip)?;
+    thread::sleep(time::Duration::from_millis(500));
+    let mut stream = TcpStream::connect(device_ip.to_string() + ":9100")?;
+    thread::sleep(time::Duration::from_millis(500));
+    notify_data_stream(&socket, device_ip)?;
+    thread::sleep(time::Duration::from_millis(500));
+    stream.write(&data)?;
+
+    println!("Print data is sent. Waiting...");
+    loop {
+        thread::sleep(time::Duration::from_millis(500));
+        let info = StatusRequest::send(&socket, device_ip)?;
+        println!("{:?}", info);
+        if let PrinterStatus::Printing = info {
+            continue;
+        }
+        break;
+    }
+
+    StopPrintRequest::send(&socket, device_ip)?;
+
+    Ok(())
+}
 fn do_print(args: PrintArgs) -> Result<()> {
     let device_ip = &args.printer;
     match (args.gen_test, args.tcp_data) {
         (false, Some(tcp_data)) => {
             let label_data = fs::read(tcp_data).context("Failed to read TCP data")?;
-
-            let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
-            let info = StatusRequest::send(&socket, device_ip)?;
-            println!("{:?}", info);
-            if let PrinterStatus::SomeTape(t) = info {
-                println!("Tape is {:?}, start printing...", t);
-            } else {
-                println!("Unexpected state. Aborting...");
-                std::process::exit(1);
-            }
-            StartPrintRequest::send(&socket, device_ip)?;
-            thread::sleep(time::Duration::from_millis(500));
-            let mut stream = TcpStream::connect(device_ip.to_string() + ":9100")?;
-            thread::sleep(time::Duration::from_millis(500));
-            notify_data_stream(&socket, device_ip)?;
-            thread::sleep(time::Duration::from_millis(500));
-            stream.write(&label_data)?;
-
-            println!("Print data is sent. Waiting...");
-            loop {
-                thread::sleep(time::Duration::from_millis(500));
-                let info = StatusRequest::send(&socket, device_ip)?;
-                println!("{:?}", info);
-                if let PrinterStatus::Printing = info {
-                    continue;
-                }
-                break;
-            }
-
-            StopPrintRequest::send(&socket, device_ip)?;
-
-            Ok(())
+            print_tcp_data(device_ip, &label_data)
         }
         (true, None) => {
-            let tape_len_px = 421;
+            let tape_len_px = 421 * 2;
             let tape_width_px = 216;
 
             let row_bytes = (tape_width_px + 7) / 8;
@@ -438,8 +440,7 @@ fn do_print(args: PrintArgs) -> Result<()> {
             tcp_data.append(&mut vec![27, 123, 3, 64, 64, 125]);
 
             analyze_tcp_data(&tcp_data)?;
-
-            Ok(())
+            print_tcp_data(device_ip, &tcp_data)
         }
         (_, _) => Err(anyhow!(
             "Please specify one of following options: --tcp-data, --gen-test"
