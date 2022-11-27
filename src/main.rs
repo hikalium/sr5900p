@@ -240,6 +240,14 @@ fn notify_data_stream(socket: &UdpSocket, device_ip: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(FromArgs, PartialEq, Debug)]
+/// Analyze the packet captures
+#[argh(subcommand, name = "analyze")]
+struct AnalyzeArgs {
+    /// the raw dump of the TCP stream while printing
+    #[argh(option)]
+    tcp_data: String,
+}
 fn do_analyze(dump_file: &str) -> Result<()> {
     let label_data = fs::read(dump_file)?;
     println!("Size: {}", label_data.len());
@@ -320,61 +328,60 @@ fn do_analyze(dump_file: &str) -> Result<()> {
     Ok(())
 }
 
-fn do_print(device_ip: &str, tcp_data: &str) -> Result<()> {
-    let label_data = fs::read(tcp_data).context("Failed to read TCP data")?;
-
-    let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
-    let info = StatusRequest::send(&socket, device_ip)?;
-    println!("{:?}", info);
-    if let PrinterStatus::SomeTape(t) = info {
-        println!("Tape is {:?}, start printing...", t);
-    } else {
-        println!("Unexpected state. Aborting...");
-        std::process::exit(1);
-    }
-    StartPrintRequest::send(&socket, device_ip)?;
-    thread::sleep(time::Duration::from_millis(500));
-    let mut stream = TcpStream::connect(device_ip.to_string() + ":9100")?;
-    thread::sleep(time::Duration::from_millis(500));
-    notify_data_stream(&socket, device_ip)?;
-    thread::sleep(time::Duration::from_millis(500));
-    stream.write(&label_data)?;
-
-    println!("Print data is sent. Waiting...");
-    loop {
-        thread::sleep(time::Duration::from_millis(500));
-        let info = StatusRequest::send(&socket, device_ip)?;
-        println!("{:?}", info);
-        if let PrinterStatus::Printing = info {
-            continue;
-        }
-        break;
-    }
-
-    StopPrintRequest::send(&socket, device_ip)?;
-
-    Ok(())
-}
-
-#[derive(FromArgs, PartialEq, Debug)]
-/// Analyze the packet captures
-#[argh(subcommand, name = "analyze")]
-struct AnalyzeArgs {
-    /// the raw dump of the TCP stream while printing
-    #[argh(option)]
-    tcp_data: String,
-}
 #[derive(FromArgs, PartialEq, Debug)]
 /// Print something
 #[argh(subcommand, name = "print")]
 struct PrintArgs {
     /// the raw dump of the TCP stream while printing
     #[argh(option)]
-    tcp_data: String,
+    tcp_data: Option<String>,
     /// an IPv4 address for the printer
     #[argh(option)]
     printer: String,
 }
+fn do_print(args: PrintArgs) -> Result<()> {
+    let device_ip = &args.printer;
+    if let Some(tcp_data) = args.tcp_data {
+        let label_data = fs::read(tcp_data).context("Failed to read TCP data")?;
+
+        let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
+        let info = StatusRequest::send(&socket, device_ip)?;
+        println!("{:?}", info);
+        if let PrinterStatus::SomeTape(t) = info {
+            println!("Tape is {:?}, start printing...", t);
+        } else {
+            println!("Unexpected state. Aborting...");
+            std::process::exit(1);
+        }
+        StartPrintRequest::send(&socket, device_ip)?;
+        thread::sleep(time::Duration::from_millis(500));
+        let mut stream = TcpStream::connect(device_ip.to_string() + ":9100")?;
+        thread::sleep(time::Duration::from_millis(500));
+        notify_data_stream(&socket, device_ip)?;
+        thread::sleep(time::Duration::from_millis(500));
+        stream.write(&label_data)?;
+
+        println!("Print data is sent. Waiting...");
+        loop {
+            thread::sleep(time::Duration::from_millis(500));
+            let info = StatusRequest::send(&socket, device_ip)?;
+            println!("{:?}", info);
+            if let PrinterStatus::Printing = info {
+                continue;
+            }
+            break;
+        }
+
+        StopPrintRequest::send(&socket, device_ip)?;
+
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "We need at least one of following options: --tcp-data"
+        ))
+    }
+}
+
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand)]
 enum ArgsSubCommand {
@@ -393,6 +400,6 @@ fn main() -> Result<()> {
     println!("{:?}", args);
     match args.nested {
         ArgsSubCommand::Analyze(args) => do_analyze(&args.tcp_data),
-        ArgsSubCommand::Print(args) => do_print(&args.printer, &args.tcp_data),
+        ArgsSubCommand::Print(args) => do_print(args),
     }
 }
