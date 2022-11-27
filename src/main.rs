@@ -43,14 +43,6 @@ unsafe impl Sliceable for StatusRequest {}
 unsafe impl Sliceable for StartPrintRequest {}
 unsafe impl Sliceable for StopPrintRequest {}
 
-#[derive(Debug, FromArgs)]
-/// Reach new heights.
-struct Args {
-    /// an optional nickname for the pilot
-    #[argh(positional)]
-    device_ip: String,
-}
-
 #[repr(packed)]
 #[derive(Copy, Clone, Debug)]
 struct PacketHeader {
@@ -246,24 +238,71 @@ fn notify_data_stream(socket: &UdpSocket, device_ip: &str) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
-    let args: Args = argh::from_env();
-    println!("{:?}", args);
+fn do_analyze(_dump_file: &str) -> Result<()> {
+    let label_data = fs::read("sample_tcp_data.bin")?;
+    println!("Size: {}", label_data.len());
+    let mut i = 0;
+    while i < label_data.len() {
+        match label_data[i] {
+            0x1b => match label_data[i + 1] {
+                0x7b => {
+                    let len = label_data[i + 2] as usize;
+                    println!(
+                        "cmd 0x1b 0x7b, len = {}, {:?}",
+                        len,
+                        &label_data[i + 3..i + 3 + len]
+                    );
+                    i += 3 + len;
+                }
+                0x2e => {
+                    if label_data[i + 2..i + 6] != [0, 0, 0, 1] {
+                        return Err(anyhow!(
+                            "Unexpected label data: {:?}...",
+                            &label_data[i..i + 16]
+                        ));
+                    }
+                    let bits = label_data[i + 6] as usize + label_data[i + 7] as usize * 256;
+                    let bytes = (bits + 7) / 8;
+                    println!(
+                        "cmd 0x1b 0x2e, bits = {bits}, bytes = {bytes}, {:?}",
+                        &label_data[i + 8..i + 8 + bytes]
+                    );
+                    i += 8 + bytes;
+                }
+                _ => {
+                    return Err(anyhow!(
+                        "Unexpected label data: {:?}...",
+                        &label_data[i..i + 16]
+                    ));
+                }
+            },
+            0x0c => {
+                println!("cmd 0x0c (data end marker?)",);
+                i += 1;
+            }
+            _ => {
+                return Err(anyhow!("Unexpected label data: {:?}...", &label_data[i..]));
+            }
+        }
+    }
+    Ok(())
+}
 
+fn do_print(device_ip: &str) -> Result<()> {
     let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
-    let info = StatusRequest::send(&socket, &args.device_ip)?;
+    let info = StatusRequest::send(&socket, device_ip)?;
     println!("{:?}", info);
     if let PrinterStatus::SomeTape(t) = info {
         println!("Tape is {:?}, start printing...", t);
     } else {
         println!("Unexpected state. Aborting...");
-        //std::process::exit(1);
+        std::process::exit(1);
     }
-    StartPrintRequest::send(&socket, &args.device_ip)?;
+    StartPrintRequest::send(&socket, device_ip)?;
     thread::sleep(time::Duration::from_millis(500));
-    let mut stream = TcpStream::connect(args.device_ip.clone() + ":9100")?;
+    let mut stream = TcpStream::connect(device_ip.to_string() + ":9100")?;
     thread::sleep(time::Duration::from_millis(500));
-    notify_data_stream(&socket, &args.device_ip)?;
+    notify_data_stream(&socket, device_ip)?;
     thread::sleep(time::Duration::from_millis(500));
     let label_data = fs::read("sample_tcp_data.bin")?;
     stream.write(&label_data)?;
@@ -271,7 +310,7 @@ fn main() -> Result<()> {
     println!("Print data is sent. Waiting...");
     loop {
         thread::sleep(time::Duration::from_millis(500));
-        let info = StatusRequest::send(&socket, &args.device_ip)?;
+        let info = StatusRequest::send(&socket, device_ip)?;
         println!("{:?}", info);
         if let PrinterStatus::Printing = info {
             continue;
@@ -279,7 +318,32 @@ fn main() -> Result<()> {
         break;
     }
 
-    StopPrintRequest::send(&socket, &args.device_ip)?;
+    StopPrintRequest::send(&socket, device_ip)?;
 
     Ok(())
+}
+
+#[derive(Debug, FromArgs)]
+/// Reach new heights.
+struct Args {
+    /// for debug: analyze the print data sent via TCP (specify the raw dump of the TCP stream)
+    #[argh(option)]
+    analyze_tcp_data: Option<String>,
+
+    /// an IPv4 address for the printer
+    #[argh(positional)]
+    device_ip: Option<String>,
+}
+
+fn main() -> Result<()> {
+    let args: Args = argh::from_env();
+    println!("{:?}", args);
+
+    if let Some(dump_file) = args.analyze_tcp_data {
+        do_analyze(&dump_file)
+    } else if let Some(device_ip) = args.device_ip {
+        do_print(&device_ip)
+    } else {
+        Err(anyhow!("Unknown command"))
+    }
 }

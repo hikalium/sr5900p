@@ -2,6 +2,10 @@
 
 A command-line interface for SR5900P tape printer.
 
+```
+cargo run -- --analyze-tcp-data sample_tcp_data.bin
+```
+
 ## License
 MIT
 
