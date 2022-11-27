@@ -39,14 +39,6 @@ unsafe impl Sliceable for StatusRequest {}
 #[derive(Debug, FromArgs)]
 /// Reach new heights.
 struct Args {
-    /// whether or not to jump
-    #[argh(switch, short = 'j')]
-    jump: bool,
-
-    /// how high to go
-    #[argh(option)]
-    height: Option<usize>,
-
     /// an optional nickname for the pilot
     #[argh(positional)]
     device_ip: String,
@@ -55,26 +47,26 @@ struct Args {
 #[repr(packed)]
 #[derive(Copy, Clone, Debug)]
 struct PacketHeader {
-    signature: [u8; 4],  // "TPRT" for requests, "tprt" for responses
-    const00_be: [u8; 4], // 00 00 00 00
-    const01_be: [u8; 4], // 00 00 00 01
-    const20_be: [u8; 4], // 00 00 00 20
-    cmd_be: [u8; 4],
-    data_size_be: [u8; 4],
-    ip_addr_be: [u8; 4],
-    token_be: [u8; 4],
+    _signature: [u8; 4],  // "TPRT" for requests, "tprt" for responses
+    _const00_be: [u8; 4], // 00 00 00 00
+    _const01_be: [u8; 4], // 00 00 00 01
+    _const20_be: [u8; 4], // 00 00 00 20
+    _cmd_be: [u8; 4],
+    _data_size_be: [u8; 4],
+    _ip_addr_be: [u8; 4],
+    _token_be: [u8; 4],
 }
 impl PacketHeader {
     fn new_request(cmd: u32, data_size: u32) -> Self {
         Self {
-            signature: *b"TPRT",
-            const00_be: 0x00u32.to_be_bytes(),
-            const01_be: 0x01u32.to_be_bytes(),
-            const20_be: 0x20u32.to_be_bytes(),
-            cmd_be: cmd.to_be_bytes(),
-            data_size_be: data_size.to_be_bytes(),
-            ip_addr_be: 0x00u32.to_be_bytes(),
-            token_be: 0x00u32.to_be_bytes(),
+            _signature: *b"TPRT",
+            _const00_be: 0x00u32.to_be_bytes(),
+            _const01_be: 0x01u32.to_be_bytes(),
+            _const20_be: 0x20u32.to_be_bytes(),
+            _cmd_be: cmd.to_be_bytes(),
+            _data_size_be: data_size.to_be_bytes(),
+            _ip_addr_be: 0x00u32.to_be_bytes(),
+            _token_be: 0x00u32.to_be_bytes(),
         }
     }
 }
@@ -101,12 +93,12 @@ enum PrinterStatus {
 #[repr(packed)]
 #[derive(Copy, Clone)]
 struct StatusRequest {
-    header: PacketHeader,
+    _header: PacketHeader,
 }
 impl StatusRequest {
     fn new() -> Self {
         Self {
-            header: PacketHeader::new_request(1, 0),
+            _header: PacketHeader::new_request(1, 0),
         }
     }
     fn send(socket: &UdpSocket, device_ip: &str) -> Result<PrinterStatus> {
