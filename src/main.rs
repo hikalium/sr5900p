@@ -279,7 +279,7 @@ fn analyze_tcp_data(data: &[u8]) -> Result<()> {
                         != payload_data.last().unwrap().wrapping_mul(2)
                     {
                         return Err(anyhow!(
-                            "Unexpected label data (not 0x7d): {:?}...",
+                            "Unexpected label data (csum invalid): {:?}...",
                             &data[i..i + 16]
                         ));
                     }
@@ -401,24 +401,19 @@ fn do_print(args: PrintArgs) -> Result<()> {
             println!("{:?}", encoded);
 
             let barcode_min_px_size = 4;
-            let tape_len_px = barcode_min_px_size * encoded.len();
+            let barcode_padding_px = 64;
+            let tape_len_px = barcode_min_px_size * encoded.len() + barcode_padding_px * 2;
             let tape_width_px = 216;
 
             let row_bytes = (tape_width_px + 7) / 8;
 
             let mut tcp_data: Vec<u8> = Vec::new();
             tcp_data.append(&mut vec![27, 123, 3, 64, 64, 125]);
-            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![64]);
             tcp_data.append(&mut vec![27, 123, 7, 123, 0, 0, 83, 84, 34, 125]);
-            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![123, 0, 0, 83, 84]);
-            tcp_data.append(&mut vec![27, 123, 7, 67, 1, 1, 1, 1, 71, 125]);
-            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![67, 1, 1, 1, 1]);
+            tcp_data.append(&mut vec![27, 123, 7, 67, 2, 2, 1, 1, 73, 125]); // half-cut?
             tcp_data.append(&mut vec![27, 123, 4, 68, 5, 73, 125]);
-            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![68, 5]);
             tcp_data.append(&mut vec![27, 123, 3, 71, 71, 125]);
-            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![71]);
 
-            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![76, 165, 1, 0, 0]); tape_len = 421
             let mut tape_len_bytes = (tape_len_px as u32).to_le_bytes().to_vec();
             let mut cmd_bytes = vec![76];
             cmd_bytes.append(&mut tape_len_bytes);
@@ -433,13 +428,17 @@ fn do_print(args: PrintArgs) -> Result<()> {
             tcp_data.append(&mut cmd_bytes);
 
             tcp_data.append(&mut vec![27, 123, 5, 84, 42, 0, 126, 125]);
-            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![84, 42, 0]);
             tcp_data.append(&mut vec![27, 123, 4, 72, 5, 77, 125]);
-            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![72, 5]);
             tcp_data.append(&mut vec![27, 123, 4, 115, 0, 115, 125]);
-            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![115, 0]);
 
-            for y in 0..tape_len_px {
+            let mut blank_data_line = Vec::new();
+            blank_data_line.resize(row_bytes, 0u8);
+            for _ in 0..barcode_padding_px {
+                tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
+                tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
+                tcp_data.append(&mut blank_data_line.clone());
+            }
+            for y in 0..tape_len_px - (barcode_padding_px * 2) {
                 tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
                 tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
                 for xb in 0..row_bytes {
@@ -456,6 +455,11 @@ fn do_print(args: PrintArgs) -> Result<()> {
                     }
                     tcp_data.push(chunk);
                 }
+            }
+            for _ in 0..barcode_padding_px {
+                tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
+                tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
+                tcp_data.append(&mut blank_data_line.clone());
             }
             tcp_data.push(0x0c); // data end
             tcp_data.append(&mut vec![27, 123, 3, 64, 64, 125]);
