@@ -6,3 +6,6 @@ print:
 
 analyze_all:
 	find ./sample_tcp_data/*.bin | xargs -I {} -- bash -c 'echo "*** {}" && cargo run -q -- analyze --tcp-data {} | grep -v "cmd 0x1b 0x2e"'
+
+gen:
+	cargo run -- print --printer 10.10.10.31 --gen-test

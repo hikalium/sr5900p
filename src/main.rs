@@ -240,29 +240,23 @@ fn notify_data_stream(socket: &UdpSocket, device_ip: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(FromArgs, PartialEq, Debug)]
-/// Analyze the packet captures
-#[argh(subcommand, name = "analyze")]
-struct AnalyzeArgs {
-    /// the raw dump of the TCP stream while printing
-    #[argh(option)]
-    tcp_data: String,
-}
-fn do_analyze(dump_file: &str) -> Result<()> {
-    let label_data = fs::read(dump_file)?;
-    println!("Size: {}", label_data.len());
+fn analyze_tcp_data(data: &[u8]) -> Result<()> {
+    println!("Size: {}", data.len());
     let mut i = 0;
     let mut num_data_rows = 0;
-    while i < label_data.len() {
-        match label_data[i] {
-            0x1b => match label_data[i + 1] {
+    while i < data.len() {
+        match data[i] {
+            0x1b => match data[i + 1] {
                 0x7b => {
-                    let mut payload_data = &label_data[i + 3..i + 3 + label_data[i + 2] as usize];
-                    i += 3 + payload_data.len();
+                    let payload_data = &data[i..i + 3 + data[i + 2] as usize];
+                    println!("{payload_data:?}");
+                    i += payload_data.len();
+                    let mut payload_data = &payload_data[3..];
+
                     if payload_data.last().unwrap() != &0x7d {
                         return Err(anyhow!(
                             "Unexpected label data (not 0x7d): {:?}...",
-                            &label_data[i..i + 16]
+                            &data[i..i + 16]
                         ));
                     }
                     payload_data.take_last();
@@ -276,7 +270,7 @@ fn do_analyze(dump_file: &str) -> Result<()> {
                     {
                         return Err(anyhow!(
                             "Unexpected label data (not 0x7d): {:?}...",
-                            &label_data[i..i + 16]
+                            &data[i..i + 16]
                         ));
                     }
                     // so the last byte of the payload_data is the checksum
@@ -291,16 +285,13 @@ fn do_analyze(dump_file: &str) -> Result<()> {
                     }
                 }
                 0x2e => {
-                    if label_data[i + 2..i + 6] != [0, 0, 0, 1] {
-                        return Err(anyhow!(
-                            "Unexpected label data: {:?}...",
-                            &label_data[i..i + 16]
-                        ));
+                    if data[i + 2..i + 6] != [0, 0, 0, 1] {
+                        return Err(anyhow!("Unexpected label data: {:?}...", &data[i..i + 16]));
                     }
-                    let bits = label_data[i + 6] as usize + label_data[i + 7] as usize * 256;
+                    let bits = data[i + 6] as usize + data[i + 7] as usize * 256;
                     let bytes = (bits + 7) / 8;
                     print!("cmd 0x1b 0x2e, bits = {bits}, bytes = {bytes}: ",);
-                    let img_data = &label_data[i + 8..i + 8 + bytes];
+                    let img_data = &data[i + 8..i + 8 + bytes];
                     for byte in img_data {
                         print!("{byte:08b}");
                     }
@@ -309,10 +300,7 @@ fn do_analyze(dump_file: &str) -> Result<()> {
                     num_data_rows += 1;
                 }
                 _ => {
-                    return Err(anyhow!(
-                        "Unexpected label data: {:?}...",
-                        &label_data[i..i + 16]
-                    ));
+                    return Err(anyhow!("Unexpected label data: {:?}...", &data[i..i + 16]));
                 }
             },
             0x0c => {
@@ -320,7 +308,7 @@ fn do_analyze(dump_file: &str) -> Result<()> {
                 i += 1;
             }
             _ => {
-                return Err(anyhow!("Unexpected label data: {:?}...", &label_data[i..]));
+                return Err(anyhow!("Unexpected label data: {:?}...", &data[i..]));
             }
         }
     }
@@ -329,9 +317,25 @@ fn do_analyze(dump_file: &str) -> Result<()> {
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
+/// Analyze the packet captures
+#[argh(subcommand, name = "analyze")]
+struct AnalyzeArgs {
+    /// the raw dump of the TCP stream while printing
+    #[argh(option)]
+    tcp_data: String,
+}
+fn do_analyze(dump_file: &str) -> Result<()> {
+    let data = fs::read(dump_file)?;
+    analyze_tcp_data(&data)
+}
+
+#[derive(FromArgs, PartialEq, Debug)]
 /// Print something
 #[argh(subcommand, name = "print")]
 struct PrintArgs {
+    /// label data generation test
+    #[argh(switch)]
+    gen_test: bool,
     /// the raw dump of the TCP stream while printing
     #[argh(option)]
     tcp_data: Option<String>,
@@ -341,44 +345,103 @@ struct PrintArgs {
 }
 fn do_print(args: PrintArgs) -> Result<()> {
     let device_ip = &args.printer;
-    if let Some(tcp_data) = args.tcp_data {
-        let label_data = fs::read(tcp_data).context("Failed to read TCP data")?;
+    match (args.gen_test, args.tcp_data) {
+        (false, Some(tcp_data)) => {
+            let label_data = fs::read(tcp_data).context("Failed to read TCP data")?;
 
-        let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
-        let info = StatusRequest::send(&socket, device_ip)?;
-        println!("{:?}", info);
-        if let PrinterStatus::SomeTape(t) = info {
-            println!("Tape is {:?}, start printing...", t);
-        } else {
-            println!("Unexpected state. Aborting...");
-            std::process::exit(1);
-        }
-        StartPrintRequest::send(&socket, device_ip)?;
-        thread::sleep(time::Duration::from_millis(500));
-        let mut stream = TcpStream::connect(device_ip.to_string() + ":9100")?;
-        thread::sleep(time::Duration::from_millis(500));
-        notify_data_stream(&socket, device_ip)?;
-        thread::sleep(time::Duration::from_millis(500));
-        stream.write(&label_data)?;
-
-        println!("Print data is sent. Waiting...");
-        loop {
-            thread::sleep(time::Duration::from_millis(500));
+            let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
             let info = StatusRequest::send(&socket, device_ip)?;
             println!("{:?}", info);
-            if let PrinterStatus::Printing = info {
-                continue;
+            if let PrinterStatus::SomeTape(t) = info {
+                println!("Tape is {:?}, start printing...", t);
+            } else {
+                println!("Unexpected state. Aborting...");
+                std::process::exit(1);
             }
-            break;
+            StartPrintRequest::send(&socket, device_ip)?;
+            thread::sleep(time::Duration::from_millis(500));
+            let mut stream = TcpStream::connect(device_ip.to_string() + ":9100")?;
+            thread::sleep(time::Duration::from_millis(500));
+            notify_data_stream(&socket, device_ip)?;
+            thread::sleep(time::Duration::from_millis(500));
+            stream.write(&label_data)?;
+
+            println!("Print data is sent. Waiting...");
+            loop {
+                thread::sleep(time::Duration::from_millis(500));
+                let info = StatusRequest::send(&socket, device_ip)?;
+                println!("{:?}", info);
+                if let PrinterStatus::Printing = info {
+                    continue;
+                }
+                break;
+            }
+
+            StopPrintRequest::send(&socket, device_ip)?;
+
+            Ok(())
         }
+        (true, None) => {
+            let tape_len_px = 421;
+            let tape_width_px = 216;
 
-        StopPrintRequest::send(&socket, device_ip)?;
+            let row_bytes = (tape_width_px + 7) / 8;
 
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "We need at least one of following options: --tcp-data"
-        ))
+            let mut tcp_data: Vec<u8> = Vec::new();
+            tcp_data.append(&mut vec![27, 123, 3, 64, 64, 125]);
+            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![64]);
+            tcp_data.append(&mut vec![27, 123, 7, 123, 0, 0, 83, 84, 34, 125]);
+            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![123, 0, 0, 83, 84]);
+            tcp_data.append(&mut vec![27, 123, 7, 67, 1, 1, 1, 1, 71, 125]);
+            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![67, 1, 1, 1, 1]);
+            tcp_data.append(&mut vec![27, 123, 4, 68, 5, 73, 125]);
+            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![68, 5]);
+            tcp_data.append(&mut vec![27, 123, 3, 71, 71, 125]);
+            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![71]);
+
+            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![76, 165, 1, 0, 0]); tape_len = 421
+            let mut tape_len_bytes = (tape_len_px as u32).to_le_bytes().to_vec();
+            let mut cmd_bytes = vec![76];
+            cmd_bytes.append(&mut tape_len_bytes);
+            let csum = cmd_bytes
+                .iter()
+                .map(|v| Wrapping(*v))
+                .sum::<Wrapping<u8>>()
+                .0;
+            cmd_bytes.push(csum);
+            cmd_bytes.push(0x7d);
+            tcp_data.append(&mut vec![0x1b, 0x7b]);
+            tcp_data.append(&mut cmd_bytes);
+
+            tcp_data.append(&mut vec![27, 123, 5, 84, 42, 0, 126, 125]);
+            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![84, 42, 0]);
+            tcp_data.append(&mut vec![27, 123, 4, 72, 5, 77, 125]);
+            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![72, 5]);
+            tcp_data.append(&mut vec![27, 123, 4, 115, 0, 115, 125]);
+            // cmd 0x1b 0x7b, tcp_data.append(&mut vec![115, 0]);
+
+            for y in 0..tape_len_px {
+                tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
+                tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
+                for xb in 0..row_bytes {
+                    let mut chunk = 0x80;
+                    for dx in 0..8 {
+                        let x = xb * 8 + (7 - dx);
+                        if x == y % tape_width_px {
+                            chunk = chunk | (1 << dx)
+                        }
+                    }
+                    tcp_data.push(chunk);
+                }
+            }
+            tcp_data.push(0x0c); // data end
+            tcp_data.append(&mut vec![27, 123, 3, 64, 64, 125]);
+
+            Ok(())
+        }
+        (_, _) => Err(anyhow!(
+            "Please specify one of following options: --tcp-data, --gen-test"
+        )),
     }
 }
 
