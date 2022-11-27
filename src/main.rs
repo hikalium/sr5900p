@@ -1,5 +1,6 @@
 #![feature(new_uninit)]
 #![feature(slice_take)]
+#![feature(exclusive_range_pattern)]
 
 use anyhow::anyhow;
 use anyhow::Context;
@@ -7,9 +8,16 @@ use anyhow::Result;
 use argh::FromArgs;
 use barcoders::sym::code39::Code39;
 use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::geometry::Dimensions;
 use embedded_graphics::geometry::OriginDimensions;
+use embedded_graphics::geometry::Point;
 use embedded_graphics::geometry::Size;
+use embedded_graphics::mono_font::ascii::FONT_10X20;
+use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::text::Alignment;
+use embedded_graphics::text::Text;
+use embedded_graphics::Drawable;
 use embedded_graphics::Pixel;
 use std::boxed::Box;
 use std::fs;
@@ -26,14 +34,20 @@ use std::time;
 struct TapeDisplay {
     /// The framebuffer with one `u8` value per pixel.
     framebuffer: Vec<Vec<bool>>,
+    width: usize,
+    height: usize,
 }
 impl TapeDisplay {
-    fn new(w: usize, h: usize) -> Self {
+    fn new(width: usize, height: usize) -> Self {
         let mut row = Vec::new();
-        row.resize(w, false);
+        row.resize(width, false);
         let mut framebuffer = Vec::new();
-        framebuffer.resize(h, row);
-        Self { framebuffer }
+        framebuffer.resize(height, row);
+        Self {
+            framebuffer,
+            width,
+            height,
+        }
     }
 }
 impl DrawTarget for TapeDisplay {
@@ -44,8 +58,11 @@ impl DrawTarget for TapeDisplay {
     where
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
+        let w = self.width as i32;
+        let h = self.height as i32;
         for Pixel(coord, color) in pixels.into_iter() {
-            if let Ok((x @ 0..=63, y @ 0..=63)) = coord.try_into() {
+            let (x, y) = coord.into();
+            if (0..w).contains(&x) && (0..h).contains(&y) {
                 self.framebuffer[y as usize][x as usize] = color.is_on();
             }
         }
@@ -55,7 +72,7 @@ impl DrawTarget for TapeDisplay {
 
 impl OriginDimensions for TapeDisplay {
     fn size(&self) -> Size {
-        Size::new(64, 64)
+        Size::new(self.width as u32, self.height as u32)
     }
 }
 
@@ -387,6 +404,9 @@ struct PrintArgs {
     /// label data generation test
     #[argh(switch)]
     gen_test: bool,
+    /// do not print (just generate and analyze)
+    #[argh(switch)]
+    dry_run: bool,
     /// the raw dump of the TCP stream while printing
     #[argh(option)]
     tcp_data: Option<String>,
@@ -472,41 +492,40 @@ fn do_print(args: PrintArgs) -> Result<()> {
             tcp_data.append(&mut vec![27, 123, 4, 72, 5, 77, 125]);
             tcp_data.append(&mut vec![27, 123, 4, 115, 0, 115, 125]);
 
-            let mut blank_data_line = Vec::new();
-            blank_data_line.resize(row_bytes, 0u8);
-            for _ in 0..barcode_padding_px {
-                tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
-                tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
-                tcp_data.append(&mut blank_data_line.clone());
-            }
-            for y in 0..tape_len_px - (barcode_padding_px * 2) {
+            let mut td = TapeDisplay::new(tape_len_px, tape_width_px);
+            let text = "embedded-graphics";
+            let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+            Text::with_alignment(
+                text,
+                td.bounding_box().center() + Point::new(0, 15),
+                character_style,
+                Alignment::Center,
+            )
+            .draw(&mut td)?;
+            for y in 0..td.width {
                 tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
                 tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
                 for xb in 0..row_bytes {
-                    let mut chunk = if encoded[y / barcode_min_px_size] == 1 {
-                        0xff
-                    } else {
-                        0x00
-                    };
+                    let mut chunk = 0x00;
                     for dx in 0..8 {
                         let x = xb * 8 + (7 - dx);
-                        if x == y % tape_width_px {
+                        if td.framebuffer[x][td.width - 1 - y] {
                             chunk = chunk | (1 << dx)
                         }
                     }
                     tcp_data.push(chunk);
                 }
             }
-            for _ in 0..barcode_padding_px {
-                tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
-                tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
-                tcp_data.append(&mut blank_data_line.clone());
-            }
             tcp_data.push(0x0c); // data end
             tcp_data.append(&mut vec![27, 123, 3, 64, 64, 125]);
 
             analyze_tcp_data(&tcp_data)?;
-            print_tcp_data(device_ip, &tcp_data)
+            if !args.dry_run {
+                print_tcp_data(device_ip, &tcp_data)
+            } else {
+                println!("--dry-run is specified, skipping printing phase");
+                Ok(())
+            }
         }
         (_, _) => Err(anyhow!(
             "Please specify one of following options: --tcp-data, --gen-test"
