@@ -95,7 +95,7 @@ enum PrinterStatus {
     SomeTape(TapeKind),
     CoverIsOpened,
     Printing,
-    Unknown(PacketHeader),
+    Unknown(PacketHeader, [u8; 20]),
 }
 
 #[repr(packed)]
@@ -115,13 +115,20 @@ impl StatusRequest {
             .send_to(&req.copy_into_slice(), device_ip.to_string() + ":9100")
             .context("failed to send")?;
         let mut buf = [0; 128];
-        println!("{:?}", buf);
         let (len, _) = socket.recv_from(&mut buf)?;
         let res_header = PacketHeader::copy_from_slice(&buf[0..len])?;
         let data = &buf[size_of::<PacketHeader>()..len];
-        Ok(match data[0x0d] {
-            0 => PrinterStatus::Printing,
-            1 => match data[0x02] {
+        println!("{:?}", data);
+        // [20, 0, 0, 4, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] // idle
+        // [20, 2, 0, 4, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] // printing
+        // [20, 0, 0, 4, 0, 0, 0, 0, 64, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0] // print is done
+        let data: [u8; 20] = data.try_into().context(anyhow!(
+            "invalid data len. expected 20 but got {}",
+            data.len()
+        ))?;
+        Ok(match (data[0x01], data[0x0d]) {
+            (2, 0) => PrinterStatus::Printing,
+            (0, 1) => match data[0x02] {
                 0x06 => PrinterStatus::NoTape,
                 0x21 => PrinterStatus::CoverIsOpened,
                 0x00 => PrinterStatus::SomeTape(match data[0x03] {
@@ -133,9 +140,9 @@ impl StatusRequest {
                     0x06 => TapeKind::W36,
                     ti => TapeKind::UnknownTapeIndex(ti),
                 }),
-                _ => PrinterStatus::Unknown(res_header),
+                _ => PrinterStatus::Unknown(res_header, data),
             },
-            _ => PrinterStatus::Unknown(res_header),
+            _ => PrinterStatus::Unknown(res_header, data),
         })
     }
 }
@@ -250,11 +257,14 @@ fn main() -> Result<()> {
         println!("Tape is {:?}, start printing...", t);
     } else {
         println!("Unexpected state. Aborting...");
-        std::process::exit(1);
+        //std::process::exit(1);
     }
     StartPrintRequest::send(&socket, &args.device_ip)?;
+    thread::sleep(time::Duration::from_millis(500));
     let mut stream = TcpStream::connect(args.device_ip.clone() + ":9100")?;
+    thread::sleep(time::Duration::from_millis(500));
     notify_data_stream(&socket, &args.device_ip)?;
+    thread::sleep(time::Duration::from_millis(500));
     let label_data = fs::read("sample_tcp_data.bin")?;
     stream.write(&label_data)?;
 
