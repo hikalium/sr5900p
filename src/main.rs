@@ -290,7 +290,9 @@ fn do_analyze(dump_file: &str) -> Result<()> {
     Ok(())
 }
 
-fn do_print(device_ip: &str) -> Result<()> {
+fn do_print(device_ip: &str, tcp_data: &str) -> Result<()> {
+    let label_data = fs::read(tcp_data).context("Failed to read TCP data")?;
+
     let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
     let info = StatusRequest::send(&socket, device_ip)?;
     println!("{:?}", info);
@@ -306,7 +308,6 @@ fn do_print(device_ip: &str) -> Result<()> {
     thread::sleep(time::Duration::from_millis(500));
     notify_data_stream(&socket, device_ip)?;
     thread::sleep(time::Duration::from_millis(500));
-    let label_data = fs::read("sample_tcp_data.bin")?;
     stream.write(&label_data)?;
 
     println!("Print data is sent. Waiting...");
@@ -325,27 +326,43 @@ fn do_print(device_ip: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(FromArgs, PartialEq, Debug)]
+/// Analyze the packet captures
+#[argh(subcommand, name = "analyze")]
+struct AnalyzeArgs {
+    /// the raw dump of the TCP stream while printing
+    #[argh(option)]
+    tcp_data: String,
+}
+#[derive(FromArgs, PartialEq, Debug)]
+/// Print something
+#[argh(subcommand, name = "print")]
+struct PrintArgs {
+    /// the raw dump of the TCP stream while printing
+    #[argh(option)]
+    tcp_data: String,
+    /// an IPv4 address for the printer
+    #[argh(option)]
+    printer: String,
+}
+#[derive(FromArgs, PartialEq, Debug)]
+#[argh(subcommand)]
+enum ArgsSubCommand {
+    Analyze(AnalyzeArgs),
+    Print(PrintArgs),
+}
 #[derive(Debug, FromArgs)]
 /// Reach new heights.
 struct Args {
-    /// for debug: analyze the print data sent via TCP (specify the raw dump of the TCP stream)
-    #[argh(option)]
-    analyze_tcp_data: Option<String>,
-
-    /// an IPv4 address for the printer
-    #[argh(positional)]
-    device_ip: Option<String>,
+    #[argh(subcommand)]
+    nested: ArgsSubCommand,
 }
 
 fn main() -> Result<()> {
     let args: Args = argh::from_env();
     println!("{:?}", args);
-
-    if let Some(dump_file) = args.analyze_tcp_data {
-        do_analyze(&dump_file)
-    } else if let Some(device_ip) = args.device_ip {
-        do_print(&device_ip)
-    } else {
-        Err(anyhow!("Unknown command"))
+    match args.nested {
+        ArgsSubCommand::Analyze(args) => do_analyze(&args.tcp_data),
+        ArgsSubCommand::Print(args) => do_print(&args.printer, &args.tcp_data),
     }
 }
