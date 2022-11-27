@@ -455,6 +455,30 @@ fn do_print(args: PrintArgs) -> Result<()> {
             print_tcp_data(device_ip, &label_data)
         }
         (true, None) => {
+            let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
+            let info = StatusRequest::send(&socket, device_ip)?;
+            let tape_width_px = if let PrinterStatus::SomeTape(t) = info {
+                println!("Tape is {:?}", t);
+                match t {
+                    TapeKind::W9 => (9 * 360 * 10 / 254),
+                    TapeKind::W12 => (12 * 360 * 10 / 254),
+                    TapeKind::W18 => (18 * 360 * 10 / 254),
+                    TapeKind::W24 => (24 * 360 * 10 / 254),
+                    _ => {
+                        return Err(anyhow!(
+                            "Failed to determine tape width. status: {:?}",
+                            info
+                        ))
+                    }
+                }
+            } else {
+                return Err(anyhow!(
+                    "Failed to determine tape width. status: {:?}",
+                    info
+                ));
+            };
+            let tape_width_px = (tape_width_px + 7) / 8 * 8;
+
             let text = "a0:ce:c8:d4:6b:39".to_uppercase().replace(":", "");
             println!("{:?}", text);
             let barcode = Code39::new(text).context("Failed to generate a barcode")?;
@@ -464,7 +488,17 @@ fn do_print(args: PrintArgs) -> Result<()> {
             let barcode_min_px_size = 4;
             let barcode_padding_px = 64;
             let tape_len_px = barcode_min_px_size * encoded.len() + barcode_padding_px * 2;
-            let tape_width_px = 216;
+
+            let mut td = TapeDisplay::new(tape_len_px / 4, tape_width_px / 4);
+            let text = "embedded-graphics";
+            let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+            Text::with_alignment(
+                text,
+                td.bounding_box().center() + Point::new(0, 5),
+                character_style,
+                Alignment::Center,
+            )
+            .draw(&mut td)?;
 
             let row_bytes = (tape_width_px + 7) / 8;
 
@@ -492,24 +526,14 @@ fn do_print(args: PrintArgs) -> Result<()> {
             tcp_data.append(&mut vec![27, 123, 4, 72, 5, 77, 125]);
             tcp_data.append(&mut vec![27, 123, 4, 115, 0, 115, 125]);
 
-            let mut td = TapeDisplay::new(tape_len_px, tape_width_px);
-            let text = "embedded-graphics";
-            let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
-            Text::with_alignment(
-                text,
-                td.bounding_box().center() + Point::new(0, 15),
-                character_style,
-                Alignment::Center,
-            )
-            .draw(&mut td)?;
-            for y in 0..td.width {
+            for y in 0..tape_len_px {
                 tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
                 tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
                 for xb in 0..row_bytes {
                     let mut chunk = 0x00;
                     for dx in 0..8 {
                         let x = xb * 8 + (7 - dx);
-                        if td.framebuffer[x][td.width - 1 - y] {
+                        if td.framebuffer[x / 4][(tape_len_px - 1 - y) / 4] {
                             chunk = chunk | (1 << dx)
                         }
                     }
