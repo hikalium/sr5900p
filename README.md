@@ -6,7 +6,21 @@ A command-line interface for SR5900P tape printer.
 cargo run -- print --printer 10.10.10.31 --tcp-data sample_tcp_data/w18_hikalium.bin
 ```
 
-## FYI: How to extract TCP data
+## How to lookup the printer's IP
+```
+dns-sd -L "KING JIM TEPRA PRO SR5900P" _pdl-datastream._tcp local | grep -o -E 'SR5900[0-9A-Za-z]+.local'
+
+# will give you "SR5900PA28A76.local" or something. With the domain name, you can lookup the address like this:
+
+dns-sd -Gv4v6 SR5900PA28A76.local
+
+# DATE: ---Mon 28 Nov 2022---
+#  5:00:25.259  ...STARTING...
+# Timestamp     A/R    Flags if Hostname                               Address                                      TTL
+#  5:00:25.260  Add 40000002  7 SR5900PA28A76.local.                   10.10.10.31                                  120
+```
+
+## How to extract TCP data
 ```
 # update these values to match with your env
 export IFACE=en0
