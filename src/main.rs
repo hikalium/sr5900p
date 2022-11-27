@@ -5,10 +5,15 @@ use anyhow::Context;
 use anyhow::Result;
 use argh::FromArgs;
 use std::boxed::Box;
+use std::fs;
+use std::io::prelude::Write;
 use std::mem::size_of;
 use std::mem::MaybeUninit;
+use std::net::TcpStream;
 use std::net::UdpSocket;
 use std::slice;
+use std::thread;
+use std::time;
 
 /// # Safety
 /// Implementing this trait is safe only when the target type can be converted
@@ -35,6 +40,8 @@ pub unsafe trait Sliceable: Sized + Copy + Clone {
 }
 unsafe impl Sliceable for PacketHeader {}
 unsafe impl Sliceable for StatusRequest {}
+unsafe impl Sliceable for StartPrintRequest {}
+unsafe impl Sliceable for StopPrintRequest {}
 
 #[derive(Debug, FromArgs)]
 /// Reach new heights.
@@ -87,6 +94,7 @@ enum PrinterStatus {
     NoTape,
     SomeTape(TapeKind),
     CoverIsOpened,
+    Printing,
     Unknown(PacketHeader),
 }
 
@@ -102,37 +110,133 @@ impl StatusRequest {
         }
     }
     fn send(socket: &UdpSocket, device_ip: &str) -> Result<PrinterStatus> {
-        let req_status = StatusRequest::new();
+        let req = Self::new();
         socket
-            .send_to(
-                &req_status.copy_into_slice(),
-                device_ip.to_string() + ":9100",
-            )
+            .send_to(&req.copy_into_slice(), device_ip.to_string() + ":9100")
             .context("failed to send")?;
-        println!("sent!");
         let mut buf = [0; 128];
-        let (len, src) = socket.recv_from(&mut buf)?;
-        println!("recv!");
+        println!("{:?}", buf);
+        let (len, _) = socket.recv_from(&mut buf)?;
         let res_header = PacketHeader::copy_from_slice(&buf[0..len])?;
-        println!("{} {} {:?}", src, len, &buf[0..len]);
-        println!("{:?}", res_header);
         let data = &buf[size_of::<PacketHeader>()..len];
-        println!("{:?}", data);
-        Ok(match data[0x02] {
-            0x06 => PrinterStatus::NoTape,
-            0x21 => PrinterStatus::CoverIsOpened,
-            0x00 => PrinterStatus::SomeTape(match data[0x03] {
-                0x01 => TapeKind::W6,
-                0x02 => TapeKind::W9,
-                0x03 => TapeKind::W12,
-                0x04 => TapeKind::W18,
-                0x05 => TapeKind::W24,
-                0x06 => TapeKind::W36,
-                ti => TapeKind::UnknownTapeIndex(ti),
-            }),
+        Ok(match data[0x0d] {
+            0 => PrinterStatus::Printing,
+            1 => match data[0x02] {
+                0x06 => PrinterStatus::NoTape,
+                0x21 => PrinterStatus::CoverIsOpened,
+                0x00 => PrinterStatus::SomeTape(match data[0x03] {
+                    0x01 => TapeKind::W6,
+                    0x02 => TapeKind::W9,
+                    0x03 => TapeKind::W12,
+                    0x04 => TapeKind::W18,
+                    0x05 => TapeKind::W24,
+                    0x06 => TapeKind::W36,
+                    ti => TapeKind::UnknownTapeIndex(ti),
+                }),
+                _ => PrinterStatus::Unknown(res_header),
+            },
             _ => PrinterStatus::Unknown(res_header),
         })
     }
+}
+
+#[repr(packed)]
+#[derive(Copy, Clone)]
+struct StartPrintRequest {
+    _header: PacketHeader,
+}
+impl StartPrintRequest {
+    fn new() -> Self {
+        Self {
+            _header: PacketHeader::new_request(2, 0),
+        }
+    }
+    fn send(socket: &UdpSocket, device_ip: &str) -> Result<()> {
+        let req = Self::new();
+        socket
+            .send_to(&req.copy_into_slice(), device_ip.to_string() + ":9100")
+            .context("failed to send")?;
+        let mut buf = [0; 128];
+        let (len, _) = socket.recv_from(&mut buf)?;
+        let res_header = PacketHeader::copy_from_slice(&buf[0..len])?;
+        let data = &buf[size_of::<PacketHeader>()..len];
+        if data == [2, 0, 0] {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "Failed to start printing. res_header: {:?}, data: {:?}",
+                res_header,
+                data
+            ))
+        }
+    }
+}
+
+#[repr(packed)]
+#[derive(Copy, Clone)]
+struct StopPrintRequest {
+    _header: PacketHeader,
+}
+impl StopPrintRequest {
+    fn new() -> Self {
+        Self {
+            _header: PacketHeader::new_request(3, 0),
+        }
+    }
+    fn send(socket: &UdpSocket, device_ip: &str) -> Result<()> {
+        let req = Self::new();
+        socket
+            .send_to(&req.copy_into_slice(), device_ip.to_string() + ":9100")
+            .context("failed to send")?;
+        let mut buf = [0; 128];
+        let (len, _) = socket.recv_from(&mut buf)?;
+        let res_header = PacketHeader::copy_from_slice(&buf[0..len])?;
+        let data = &buf[size_of::<PacketHeader>()..len];
+        if data == [3, 0, 0] {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "Failed to stop printing. res_header: {:?}, data: {:?}",
+                res_header,
+                data
+            ))
+        }
+    }
+}
+
+fn notify_data_stream(socket: &UdpSocket, device_ip: &str) -> Result<()> {
+    let mut buf = [0; 128];
+
+    let req = PacketHeader::new_request(0x0101, 0);
+    socket
+        .send_to(&req.copy_into_slice(), device_ip.to_string() + ":9100")
+        .context("failed to send")?;
+    let (len, _) = socket.recv_from(&mut buf)?;
+    let res_header = PacketHeader::copy_from_slice(&buf[0..len])?;
+    let data = &buf[size_of::<PacketHeader>()..len];
+    if data.len() != 0 {
+        return Err(anyhow!(
+            "Invalid response for cmd 0101: {:?}, data: {:?}",
+            res_header,
+            data
+        ));
+    }
+
+    let req = PacketHeader::new_request(0x0100, 0);
+    socket
+        .send_to(&req.copy_into_slice(), device_ip.to_string() + ":9100")
+        .context("failed to send")?;
+    let (len, _) = socket.recv_from(&mut buf)?;
+    let res_header = PacketHeader::copy_from_slice(&buf[0..len])?;
+    let data = &buf[size_of::<PacketHeader>()..len];
+    if data != [0x10] {
+        return Err(anyhow!(
+            "Invalid response for cmd 0100: {:?}, data: {:?}",
+            res_header,
+            data
+        ));
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -142,6 +246,30 @@ fn main() -> Result<()> {
     let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
     let info = StatusRequest::send(&socket, &args.device_ip)?;
     println!("{:?}", info);
+    if let PrinterStatus::SomeTape(t) = info {
+        println!("Tape is {:?}, start printing...", t);
+    } else {
+        println!("Unexpected state. Aborting...");
+        std::process::exit(1);
+    }
+    StartPrintRequest::send(&socket, &args.device_ip)?;
+    let mut stream = TcpStream::connect(args.device_ip.clone() + ":9100")?;
+    notify_data_stream(&socket, &args.device_ip)?;
+    let label_data = fs::read("sample_tcp_data.bin")?;
+    stream.write(&label_data)?;
+
+    println!("Print data is sent. Waiting...");
+    loop {
+        thread::sleep(time::Duration::from_millis(500));
+        let info = StatusRequest::send(&socket, &args.device_ip)?;
+        println!("{:?}", info);
+        if let PrinterStatus::Printing = info {
+            continue;
+        }
+        break;
+    }
+
+    StopPrintRequest::send(&socket, &args.device_ip)?;
 
     Ok(())
 }
