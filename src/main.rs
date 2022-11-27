@@ -6,6 +6,11 @@ use anyhow::Context;
 use anyhow::Result;
 use argh::FromArgs;
 use barcoders::sym::code39::Code39;
+use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::geometry::OriginDimensions;
+use embedded_graphics::geometry::Size;
+use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::Pixel;
 use std::boxed::Box;
 use std::fs;
 use std::io::prelude::Write;
@@ -17,6 +22,42 @@ use std::num::Wrapping;
 use std::slice;
 use std::thread;
 use std::time;
+
+struct TapeDisplay {
+    /// The framebuffer with one `u8` value per pixel.
+    framebuffer: Vec<Vec<bool>>,
+}
+impl TapeDisplay {
+    fn new(w: usize, h: usize) -> Self {
+        let mut row = Vec::new();
+        row.resize(w, false);
+        let mut framebuffer = Vec::new();
+        framebuffer.resize(h, row);
+        Self { framebuffer }
+    }
+}
+impl DrawTarget for TapeDisplay {
+    type Color = BinaryColor;
+    type Error = core::convert::Infallible;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(coord, color) in pixels.into_iter() {
+            if let Ok((x @ 0..=63, y @ 0..=63)) = coord.try_into() {
+                self.framebuffer[y as usize][x as usize] = color.is_on();
+            }
+        }
+        Ok(())
+    }
+}
+
+impl OriginDimensions for TapeDisplay {
+    fn size(&self) -> Size {
+        Size::new(64, 64)
+    }
+}
 
 /// # Safety
 /// Implementing this trait is safe only when the target type can be converted
