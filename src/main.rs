@@ -5,6 +5,7 @@ use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use argh::FromArgs;
+use barcoders::sym::code39::Code39;
 use std::boxed::Box;
 use std::fs;
 use std::io::prelude::Write;
@@ -113,16 +114,23 @@ impl StatusRequest {
         let res_header = PacketHeader::copy_from_slice(&buf[0..len])?;
         let data = &buf[size_of::<PacketHeader>()..len];
         println!("{:?}", data);
-        // [20, 0, 0, 4, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] // idle
-        // [20, 2, 0, 4, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] // printing
-        // [20, 0, 0, 4, 0, 0, 0, 0, 64, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0] // print is done
+        // idle
+        // [20, 0,  0, 4, 0, 0, 0, 0, 64, 0, 0,  0, 0, 0,  0, 0,  0, 0, 0, 0]
+        // printing
+        // [20, 2,  0, 4, 0, 0, 0, 0, 64, 0, 0,  0, 0, 0,  0, 0,  0, 0, 0, 0]
+        // printing completed
+        // [20, 0,  0, 4, 0, 0, 0, 0, 64, 0, 0,  0, 0, 1,  0, 0,  0, 0, 0, 0]
+        // Tape exhausted
+        // [20, 0, 66, 4, 0, 0, 0, 0, 64, 0, 0, 64, 0, 0, 66, 0, 64, 0, 0, 0]
+        // ???
+        // [20, 0,  0, 4, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0,  66, 0, 64, 0, 0, 0]
         let data: [u8; 20] = data.try_into().context(anyhow!(
             "invalid data len. expected 20 but got {}",
             data.len()
         ))?;
         Ok(match (data[0x01], data[0x0d]) {
             (2, 0) => PrinterStatus::Printing,
-            (0, 1) => match data[0x02] {
+            (0, 0 | 1) => match data[0x02] {
                 0x06 => PrinterStatus::NoTape,
                 0x21 => PrinterStatus::CoverIsOpened,
                 0x00 => PrinterStatus::SomeTape(match data[0x03] {
@@ -230,7 +238,9 @@ fn notify_data_stream(socket: &UdpSocket, device_ip: &str) -> Result<()> {
     let (len, _) = socket.recv_from(&mut buf)?;
     let res_header = PacketHeader::copy_from_slice(&buf[0..len])?;
     let data = &buf[size_of::<PacketHeader>()..len];
-    if data != [0x10] {
+    if data == [0x00] {
+        println!("Warning: response for cmd 0x0100 was 0x00 (normally 0x10)");
+    } else if data != [0x10] {
         return Err(anyhow!(
             "Invalid response for cmd 0100: {:?}, data: {:?}",
             res_header,
@@ -384,7 +394,14 @@ fn do_print(args: PrintArgs) -> Result<()> {
             print_tcp_data(device_ip, &label_data)
         }
         (true, None) => {
-            let tape_len_px = 421 * 2;
+            let text = "a0:ce:c8:d4:6b:39".to_uppercase().replace(":", "");
+            println!("{:?}", text);
+            let barcode = Code39::new(text).context("Failed to generate a barcode")?;
+            let encoded: Vec<u8> = barcode.encode();
+            println!("{:?}", encoded);
+
+            let barcode_min_px_size = 4;
+            let tape_len_px = barcode_min_px_size * encoded.len();
             let tape_width_px = 216;
 
             let row_bytes = (tape_width_px + 7) / 8;
@@ -426,7 +443,11 @@ fn do_print(args: PrintArgs) -> Result<()> {
                 tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
                 tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
                 for xb in 0..row_bytes {
-                    let mut chunk = if y % 8 == 0 { 0xff } else { 0x80 };
+                    let mut chunk = if encoded[y / barcode_min_px_size] == 1 {
+                        0xff
+                    } else {
+                        0x00
+                    };
                     for dx in 0..8 {
                         let x = xb * 8 + (7 - dx);
                         if x == y % tape_width_px {
