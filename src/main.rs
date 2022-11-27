@@ -263,10 +263,12 @@ fn do_analyze(_dump_file: &str) -> Result<()> {
                     }
                     let bits = label_data[i + 6] as usize + label_data[i + 7] as usize * 256;
                     let bytes = (bits + 7) / 8;
-                    println!(
-                        "cmd 0x1b 0x2e, bits = {bits}, bytes = {bytes}, {:?}",
-                        &label_data[i + 8..i + 8 + bytes]
-                    );
+                    print!("cmd 0x1b 0x2e, bits = {bits}, bytes = {bytes}: ",);
+                    let img_data = &label_data[i + 8..i + 8 + bytes];
+                    for byte in img_data {
+                        print!("{byte:08b}");
+                    }
+                    print!("\n");
                     i += 8 + bytes;
                 }
                 _ => {
