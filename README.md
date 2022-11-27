@@ -13,4 +13,4 @@ MIT
 hikalium
 
 ## Special Thanks
-Mine02C4 (for [the initial of the protocol](https://github.com/Mine02C4/TEPRA_PRO_SR5900P_analysis) )
+Mine02C4 (for [the initial analysis of the protocol](https://github.com/Mine02C4/TEPRA_PRO_SR5900P_analysis) )
