@@ -410,7 +410,7 @@ fn do_print(args: PrintArgs) -> Result<()> {
                 .0;
             cmd_bytes.push(csum);
             cmd_bytes.push(0x7d);
-            tcp_data.append(&mut vec![0x1b, 0x7b]);
+            tcp_data.append(&mut vec![0x1b, 0x7b, cmd_bytes.len() as u8]);
             tcp_data.append(&mut cmd_bytes);
 
             tcp_data.append(&mut vec![27, 123, 5, 84, 42, 0, 126, 125]);
@@ -424,7 +424,7 @@ fn do_print(args: PrintArgs) -> Result<()> {
                 tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
                 tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
                 for xb in 0..row_bytes {
-                    let mut chunk = 0x80;
+                    let mut chunk = if y % 8 == 0 { 0xff } else { 0x80 };
                     for dx in 0..8 {
                         let x = xb * 8 + (7 - dx);
                         if x == y % tape_width_px {
@@ -436,6 +436,8 @@ fn do_print(args: PrintArgs) -> Result<()> {
             }
             tcp_data.push(0x0c); // data end
             tcp_data.append(&mut vec![27, 123, 3, 64, 64, 125]);
+
+            analyze_tcp_data(&tcp_data)?;
 
             Ok(())
         }
