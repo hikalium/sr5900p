@@ -460,10 +460,10 @@ fn do_print(args: PrintArgs) -> Result<()> {
             let tape_width_px = if let PrinterStatus::SomeTape(t) = info {
                 println!("Tape is {:?}", t);
                 match t {
-                    TapeKind::W9 => (9 * 360 * 10 / 254),
-                    TapeKind::W12 => (12 * 360 * 10 / 254),
-                    TapeKind::W18 => (18 * 360 * 10 / 254),
-                    TapeKind::W24 => (24 * 360 * 10 / 254),
+                    TapeKind::W9 => 9 * 360 * 10 / 254,
+                    TapeKind::W12 => 12 * 360 * 10 / 254,
+                    TapeKind::W18 => 18 * 360 * 10 / 254,
+                    TapeKind::W24 => 24 * 360 * 10 / 254,
                     _ => {
                         return Err(anyhow!(
                             "Failed to determine tape width. status: {:?}",
