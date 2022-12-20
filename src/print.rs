@@ -94,12 +94,8 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
                     TapeKind::W12 => 12 * 360 * 10 / 254,
                     TapeKind::W18 => 18 * 360 * 10 / 254,
                     TapeKind::W24 => 24 * 360 * 10 / 254,
-                    _ => {
-                        return Err(anyhow!(
-                            "Failed to determine tape width. status: {:?}",
-                            info
-                        ))
-                    }
+                    TapeKind::W36 => 36 * 360 * 10 / 254,
+                    _ => return Err(anyhow!("Failed to calc tape width. status: {:?}", info)),
                 }
             } else {
                 return Err(anyhow!(
@@ -178,7 +174,23 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
             if !args.dry_run {
                 print_tcp_data(device_ip, &tcp_data)
             } else {
+                let mut img =
+                    bmp::Image::new(td.framebuffer[0].len() as u32, td.framebuffer.len() as u32);
                 println!("--dry-run is specified, skipping printing phase");
+                for (y, row) in td.framebuffer.iter().enumerate() {
+                    for (x, pixel) in row.iter().enumerate() {
+                        img.set_pixel(
+                            x as u32,
+                            y as u32,
+                            if *pixel {
+                                bmp::Pixel::new(0, 0, 0)
+                            } else {
+                                bmp::Pixel::new(255, 255, 255)
+                            },
+                        );
+                    }
+                    img.save("preview.bmp")?
+                }
                 Ok(())
             }
         }

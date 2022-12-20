@@ -101,7 +101,7 @@ impl StatusRequest {
         ))?;
         Ok(match (data[0x01], data[0x0d]) {
             (2, 0) => PrinterStatus::Printing,
-            (0, 0 | 1) => match data[0x02] {
+            (0, 0 | 1 | 2) => match data[0x02] {
                 0x06 => PrinterStatus::NoTape,
                 0x21 => PrinterStatus::CoverIsOpened,
                 0x00 => PrinterStatus::SomeTape(match data[0x03] {
@@ -115,7 +115,10 @@ impl StatusRequest {
                 }),
                 _ => PrinterStatus::Unknown(res_header, data),
             },
-            _ => PrinterStatus::Unknown(res_header, data),
+            (v01, v0d) => {
+                eprintln!("v01: {v01}, v0d: {v0d}");
+                PrinterStatus::Unknown(res_header, data)
+            }
         })
     }
 }
