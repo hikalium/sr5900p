@@ -25,6 +25,7 @@ use embedded_graphics::text::Text;
 use embedded_graphics::Drawable;
 use image::Luma;
 use qrcode::QrCode;
+use regex::Regex;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::Write;
@@ -40,9 +41,9 @@ use std::time;
 /// Print something
 #[argh(subcommand, name = "print")]
 pub struct PrintArgs {
-    /// label data generation test
-    #[argh(switch)]
-    gen_test: bool,
+    /// generate a label for a mac addr
+    #[argh(option)]
+    mac_addr: Option<String>,
     /// do not print (just generate and analyze)
     #[argh(switch)]
     dry_run: bool,
@@ -133,12 +134,18 @@ fn gen_tcp_data(td: &TapeDisplay) -> Result<Vec<u8>> {
 }
 pub fn do_print(args: PrintArgs) -> Result<()> {
     let device_ip = &args.printer;
-    match (args.gen_test, args.tcp_data) {
-        (false, Some(tcp_data)) => {
+    match (args.mac_addr, args.tcp_data) {
+        (None, Some(tcp_data)) => {
             let label_data = fs::read(tcp_data).context("Failed to read TCP data")?;
             print_tcp_data(device_ip, &label_data)
         }
-        (true, None) => {
+        (Some(mac_addr), None) => {
+            let text = mac_addr.to_uppercase().replace(":", "");
+            println!("{:?}", text);
+            let re = Regex::new(r"^[0-9A-Z]{12}$").unwrap();
+            if !re.is_match(&text) {
+                return Err(anyhow!("Invalid MAC Address: {mac_addr}"));
+            }
             let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
             let info = StatusRequest::send(&socket, device_ip)?;
             let tape_width_px = if let PrinterStatus::SomeTape(t) = info {
@@ -159,9 +166,6 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
                 ));
             };
             let tape_width_px = (tape_width_px + 7) / 8 * 8;
-
-            let text = "a0:ce:c8:d4:6b:39".to_uppercase().replace(":", "");
-            println!("{:?}", text);
 
             let qr_td = {
                 let mut td = TapeDisplay::new(tape_width_px, tape_width_px);
@@ -255,7 +259,7 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
             }
         }
         (_, _) => Err(anyhow!(
-            "Please specify one of following options: --tcp-data, --gen-test"
+            "Please specify one of following options: --tcp-data, --mac-addr"
         )),
     }
 }
