@@ -16,13 +16,15 @@ use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::BinaryColor;
-use embedded_graphics::primitives::Line;
+use embedded_graphics::prelude::Size;
 use embedded_graphics::primitives::PrimitiveStyle;
+use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::primitives::StyledDrawable;
 use embedded_graphics::text::Alignment;
 use embedded_graphics::text::Text;
 use embedded_graphics::Drawable;
-use std::cmp::min;
+use image::Luma;
+use qrcode::QrCode;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::Write;
@@ -84,11 +86,7 @@ fn print_tcp_data(device_ip: &str, data: &[u8]) -> Result<()> {
 
     Ok(())
 }
-fn gen_tcp_data(
-    tape_len_px: usize,
-    tape_width_px: usize,
-    tape_display: &TapeDisplay,
-) -> Result<Vec<u8>> {
+fn gen_tcp_data(td: &TapeDisplay) -> Result<Vec<u8>> {
     let mut tcp_data: Vec<u8> = Vec::new();
     tcp_data.append(&mut vec![27, 123, 3, 64, 64, 125]);
     tcp_data.append(&mut vec![27, 123, 7, 123, 0, 0, 83, 84, 34, 125]);
@@ -96,7 +94,7 @@ fn gen_tcp_data(
     tcp_data.append(&mut vec![27, 123, 4, 68, 5, 73, 125]);
     tcp_data.append(&mut vec![27, 123, 3, 71, 71, 125]);
 
-    let mut tape_len_bytes = (tape_len_px as u32).to_le_bytes().to_vec();
+    let mut tape_len_bytes = (td.width as u32).to_le_bytes().to_vec();
     let mut cmd_bytes = vec![76];
     cmd_bytes.append(&mut tape_len_bytes);
     let csum = cmd_bytes
@@ -113,20 +111,16 @@ fn gen_tcp_data(
     tcp_data.append(&mut vec![27, 123, 4, 72, 5, 77, 125]);
     tcp_data.append(&mut vec![27, 123, 4, 115, 0, 115, 125]);
 
-    let ratio = min(
-        tape_len_px / tape_display.framebuffer.len(),
-        tape_width_px / tape_display.framebuffer[0].len(),
-    );
-    let row_bytes = (tape_width_px + 7) / 8;
-    for y in 0..tape_len_px {
+    let row_bytes = (td.height + 7) / 8;
+    for y in 0..td.width {
         tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
-        tcp_data.append(&mut (tape_width_px as u16).to_le_bytes().to_vec());
+        tcp_data.append(&mut (td.height as u16).to_le_bytes().to_vec());
         for xb in 0..row_bytes {
             let mut chunk = 0x00;
             for dx in 0..8 {
                 let x = xb * 8 + (7 - dx);
 
-                if tape_display.framebuffer[x / ratio][(tape_len_px - 1 - y) / ratio] {
+                if td.get_pixel(td.width - 1 - y, x) {
                     chunk = chunk | (1 << dx)
                 }
             }
@@ -165,47 +159,64 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
                 ));
             };
             let tape_width_px = (tape_width_px + 7) / 8 * 8;
-            let tape_len_px = tape_width_px;
-
-            let td_xsize = tape_len_px / 2;
-            let td_ysize = tape_width_px / 2;
-            let mut td = TapeDisplay::new(td_xsize, td_ysize);
 
             let text = "a0:ce:c8:d4:6b:39".to_uppercase().replace(":", "");
             println!("{:?}", text);
+
+            let qr_td = {
+                let mut td = TapeDisplay::new(tape_width_px, tape_width_px);
+                let tape_width_px = tape_width_px as u32;
+                let code = QrCode::new(&text).unwrap();
+                let image = code
+                    .render::<Luma<u8>>()
+                    .max_dimensions(tape_width_px, tape_width_px)
+                    .build();
+                let ofs_x = (tape_width_px - image.width()) / 2;
+                let ofs_y = (tape_width_px - image.height()) / 2;
+                for (x, y, p) in image.enumerate_pixels() {
+                    Rectangle::new(
+                        Point::new((x + ofs_x) as i32, (y + ofs_y) as i32),
+                        Size::new_equal(1),
+                    )
+                    .draw_styled(
+                        &PrimitiveStyle::with_fill(BinaryColor::from(p.0[0] == 0)),
+                        &mut td,
+                    )?;
+                }
+                image.save("qrcode.png").unwrap();
+                td
+            };
+
             let barcode = Code39::new(&text).context("Failed to generate a barcode")?;
             let encoded: Vec<u8> = barcode.encode();
             println!("{:?}", encoded);
 
-            let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
-            Text::with_alignment(
-                &text,
-                td.bounding_box().center() + Point::new(0, (td_ysize / 2).try_into()?),
-                character_style,
-                Alignment::Center,
-            )
-            .draw(&mut td)?;
-            Line::new(
-                Point::new(0, 0),
-                Point::new(td_xsize as i32, (td_ysize - 1) as i32),
-            )
-            .draw_styled(&PrimitiveStyle::with_stroke(BinaryColor::On, 1), &mut td)?;
-            Line::new(
-                Point::new((td_xsize - 1) as i32, 0),
-                Point::new((td_xsize - 1) as i32, (td_ysize - 1) as i32),
-            )
-            .draw_styled(&PrimitiveStyle::with_stroke(BinaryColor::On, 1), &mut td)?;
-            Line::new(
-                Point::new(0, (td_ysize - 1) as i32),
-                Point::new((td_xsize - 1) as i32, (td_ysize - 1) as i32),
-            )
-            .draw_styled(&PrimitiveStyle::with_stroke(BinaryColor::On, 1), &mut td)?;
+            let mac_td = {
+                let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+                let text_len = text.len();
+                let mut td = TapeDisplay::new(10 * text_len, 20);
+                Text::with_alignment(
+                    &text,
+                    td.bounding_box().center() + Point::new(0, 10),
+                    character_style,
+                    Alignment::Center,
+                )
+                .draw(&mut td)?;
+                let td = td.rotated();
+                let r = qr_td.height / td.height;
+                td.scaled(r)
+            };
+
+            // Merge the components
+            let mut td = TapeDisplay::new(qr_td.width + mac_td.width, tape_width_px);
+            td.overlay_or(&mac_td, 0, 0);
+            td.overlay_or(&qr_td, mac_td.width, 0);
 
             // Generate preview image
             let path = Path::new(r"preview.png");
             let file = File::create(path).unwrap();
             let ref mut w = BufWriter::new(file);
-            let mut encoder = png::Encoder::new(w, td_xsize as u32, td_ysize as u32); // Width is 2 pixels and height is 1.
+            let mut encoder = png::Encoder::new(w, td.width as u32, td.height as u32); // Width is 2 pixels and height is 1.
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
             encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455)); // 1.0 / 2.2, scaled by 100000
@@ -234,7 +245,7 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
                 .collect();
             writer.write_image_data(&data).unwrap();
 
-            let tcp_data = gen_tcp_data(tape_len_px, tape_width_px, &td)?;
+            let tcp_data = gen_tcp_data(&td)?;
 
             if !args.dry_run {
                 print_tcp_data(device_ip, &tcp_data)
