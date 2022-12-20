@@ -16,9 +16,13 @@ use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::primitives::Line;
+use embedded_graphics::primitives::PrimitiveStyle;
+use embedded_graphics::primitives::StyledDrawable;
 use embedded_graphics::text::Alignment;
 use embedded_graphics::text::Text;
 use embedded_graphics::Drawable;
+use std::cmp::min;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::Write;
@@ -109,6 +113,10 @@ fn gen_tcp_data(
     tcp_data.append(&mut vec![27, 123, 4, 72, 5, 77, 125]);
     tcp_data.append(&mut vec![27, 123, 4, 115, 0, 115, 125]);
 
+    let ratio = min(
+        tape_len_px / tape_display.framebuffer.len(),
+        tape_width_px / tape_display.framebuffer[0].len(),
+    );
     let row_bytes = (tape_width_px + 7) / 8;
     for y in 0..tape_len_px {
         tcp_data.append(&mut vec![0x1b, 0x2e, 0, 0, 0, 1]);
@@ -118,7 +126,7 @@ fn gen_tcp_data(
             for dx in 0..8 {
                 let x = xb * 8 + (7 - dx);
 
-                if tape_display.framebuffer[x][(tape_len_px - 1 - y)] {
+                if tape_display.framebuffer[x / ratio][(tape_len_px - 1 - y) / ratio] {
                     chunk = chunk | (1 << dx)
                 }
             }
@@ -142,11 +150,12 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
             let tape_width_px = if let PrinterStatus::SomeTape(t) = info {
                 println!("Tape is {:?}", t);
                 match t {
-                    TapeKind::W9 => 9 * 360 * 10 / 254,
-                    TapeKind::W12 => 12 * 360 * 10 / 254,
-                    TapeKind::W18 => 18 * 360 * 10 / 254,
-                    TapeKind::W24 => 24 * 360 * 10 / 254,
-                    TapeKind::W36 => 36 * 360 * 10 / 254,
+                    // -4mm will be the printable width...
+                    TapeKind::W9 => 5 * 360 * 10 / 254,
+                    TapeKind::W12 => 10 * 360 * 10 / 254,
+                    TapeKind::W18 => 14 * 360 * 10 / 254, // verified
+                    TapeKind::W24 => 20 * 360 * 10 / 254,
+                    TapeKind::W36 => 26 * 360 * 10 / 254, // verified
                     _ => return Err(anyhow!("Failed to calc tape width. status: {:?}", info)),
                 }
             } else {
@@ -158,7 +167,9 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
             let tape_width_px = (tape_width_px + 7) / 8 * 8;
             let tape_len_px = tape_width_px;
 
-            let mut td = TapeDisplay::new(tape_len_px, tape_width_px);
+            let td_xsize = tape_len_px / 2;
+            let td_ysize = tape_width_px / 2;
+            let mut td = TapeDisplay::new(td_xsize, td_ysize);
 
             let text = "a0:ce:c8:d4:6b:39".to_uppercase().replace(":", "");
             println!("{:?}", text);
@@ -169,11 +180,59 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
             let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
             Text::with_alignment(
                 &text,
-                td.bounding_box().center() + Point::new(0, (tape_width_px / 2).try_into()?),
+                td.bounding_box().center() + Point::new(0, (td_ysize / 2).try_into()?),
                 character_style,
                 Alignment::Center,
             )
             .draw(&mut td)?;
+            Line::new(
+                Point::new(0, 0),
+                Point::new(td_xsize as i32, (td_ysize - 1) as i32),
+            )
+            .draw_styled(&PrimitiveStyle::with_stroke(BinaryColor::On, 1), &mut td)?;
+            Line::new(
+                Point::new((td_xsize - 1) as i32, 0),
+                Point::new((td_xsize - 1) as i32, (td_ysize - 1) as i32),
+            )
+            .draw_styled(&PrimitiveStyle::with_stroke(BinaryColor::On, 1), &mut td)?;
+            Line::new(
+                Point::new(0, (td_ysize - 1) as i32),
+                Point::new((td_xsize - 1) as i32, (td_ysize - 1) as i32),
+            )
+            .draw_styled(&PrimitiveStyle::with_stroke(BinaryColor::On, 1), &mut td)?;
+
+            // Generate preview image
+            let path = Path::new(r"preview.png");
+            let file = File::create(path).unwrap();
+            let ref mut w = BufWriter::new(file);
+            let mut encoder = png::Encoder::new(w, td_xsize as u32, td_ysize as u32); // Width is 2 pixels and height is 1.
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455)); // 1.0 / 2.2, scaled by 100000
+            encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2)); // 1.0 / 2.2, unscaled, but rounded
+            let source_chromaticities = png::SourceChromaticities::new(
+                // Using unscaled instantiation here
+                (0.31270, 0.32900),
+                (0.64000, 0.33000),
+                (0.30000, 0.60000),
+                (0.15000, 0.06000),
+            );
+            encoder.set_source_chromaticities(source_chromaticities);
+            let mut writer = encoder.write_header().unwrap();
+            let data: Vec<u8> = td
+                .framebuffer
+                .iter()
+                .flat_map(|row| row.iter())
+                .flat_map(|c| {
+                    // data will be [RGBARGBA...]
+                    if *c {
+                        [0, 0, 0, 255]
+                    } else {
+                        [255, 255, 255, 255]
+                    }
+                })
+                .collect();
+            writer.write_image_data(&data).unwrap();
 
             let tcp_data = gen_tcp_data(tape_len_px, tape_width_px, &td)?;
 
@@ -181,40 +240,6 @@ pub fn do_print(args: PrintArgs) -> Result<()> {
                 print_tcp_data(device_ip, &tcp_data)
             } else {
                 analyze_tcp_data(&tcp_data)?;
-                // Generate preview image
-                let path = Path::new(r"preview.png");
-                let file = File::create(path).unwrap();
-                let ref mut w = BufWriter::new(file);
-
-                let mut encoder = png::Encoder::new(w, tape_len_px as u32, tape_width_px as u32); // Width is 2 pixels and height is 1.
-                encoder.set_color(png::ColorType::Rgba);
-                encoder.set_depth(png::BitDepth::Eight);
-                encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455)); // 1.0 / 2.2, scaled by 100000
-                encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2)); // 1.0 / 2.2, unscaled, but rounded
-                let source_chromaticities = png::SourceChromaticities::new(
-                    // Using unscaled instantiation here
-                    (0.31270, 0.32900),
-                    (0.64000, 0.33000),
-                    (0.30000, 0.60000),
-                    (0.15000, 0.06000),
-                );
-                encoder.set_source_chromaticities(source_chromaticities);
-                let mut writer = encoder.write_header().unwrap();
-                let data: Vec<u8> = td
-                    .framebuffer
-                    .iter()
-                    .flat_map(|row| row.iter())
-                    .flat_map(|c| {
-                        // data will be [RGBARGBA...]
-                        if *c {
-                            [0, 0, 0, 255]
-                        } else {
-                            [255, 255, 255, 255]
-                        }
-                    })
-                    .collect();
-
-                writer.write_image_data(&data).unwrap();
                 Ok(())
             }
         }
