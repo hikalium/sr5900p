@@ -44,6 +44,9 @@ pub struct PrintArgs {
     /// generate a label for a mac addr
     #[argh(option)]
     mac_addr: Option<String>,
+    /// generate a label for a QR code with text
+    #[argh(option)]
+    qr_text: Option<String>,
     /// do not print (just generate and analyze)
     #[argh(switch)]
     dry_run: bool,
@@ -132,134 +135,248 @@ fn gen_tcp_data(td: &TapeDisplay) -> Result<Vec<u8>> {
     tcp_data.append(&mut vec![27, 123, 3, 64, 64, 125]);
     Ok(tcp_data)
 }
+
+fn print_mac_addr(mac_addr: &str, device_ip: &str, dry_run: bool) -> Result<()> {
+    let text = mac_addr.to_uppercase().replace(":", "");
+    println!("{:?}", text);
+    let re = Regex::new(r"^[0-9A-Z]{12}$").unwrap();
+    if !re.is_match(&text) {
+        return Err(anyhow!("Invalid MAC Address: {mac_addr}"));
+    }
+    let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
+    let info = StatusRequest::send(&socket, device_ip)?;
+    let tape_width_px = if let PrinterStatus::SomeTape(t) = info {
+        println!("Tape is {:?}", t);
+        match t {
+            // -4mm will be the printable width...
+            TapeKind::W9 => 5 * 360 * 10 / 254,
+            TapeKind::W12 => 10 * 360 * 10 / 254,
+            TapeKind::W18 => 14 * 360 * 10 / 254, // verified
+            TapeKind::W24 => 20 * 360 * 10 / 254,
+            TapeKind::W36 => 26 * 360 * 10 / 254, // verified
+            _ => return Err(anyhow!("Failed to calc tape width. status: {:?}", info)),
+        }
+    } else {
+        return Err(anyhow!(
+            "Failed to determine tape width. status: {:?}",
+            info
+        ));
+    };
+    let tape_width_px = (tape_width_px + 7) / 8 * 8;
+
+    let qr_td = {
+        let mut td = TapeDisplay::new(tape_width_px, tape_width_px);
+        let tape_width_px = tape_width_px as u32;
+        let code = QrCode::new(&text).unwrap();
+        let image = code
+            .render::<Luma<u8>>()
+            .max_dimensions(tape_width_px, tape_width_px)
+            .build();
+        let ofs_x = (tape_width_px - image.width()) / 2;
+        let ofs_y = (tape_width_px - image.height()) / 2;
+        for (x, y, p) in image.enumerate_pixels() {
+            Rectangle::new(
+                Point::new((x + ofs_x) as i32, (y + ofs_y) as i32),
+                Size::new_equal(1),
+            )
+            .draw_styled(
+                &PrimitiveStyle::with_fill(BinaryColor::from(p.0[0] == 0)),
+                &mut td,
+            )?;
+        }
+        image.save("qrcode.png").unwrap();
+        td
+    };
+
+    let barcode = Code39::new(&text).context("Failed to generate a barcode")?;
+    let encoded: Vec<u8> = barcode.encode();
+    println!("{:?}", encoded);
+
+    let mac_td = {
+        let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+        let text_len = text.len();
+        let mut td = TapeDisplay::new(10 * text_len, 20);
+        Text::with_alignment(
+            &text,
+            td.bounding_box().center() + Point::new(0, 10),
+            character_style,
+            Alignment::Center,
+        )
+        .draw(&mut td)?;
+        let td = td.rotated();
+        let r = qr_td.height / td.height;
+        td.scaled(r)
+    };
+
+    // Merge the components
+    let mut td = TapeDisplay::new(qr_td.width + mac_td.width, tape_width_px);
+    td.overlay_or(&mac_td, 0, 0);
+    td.overlay_or(&qr_td, mac_td.width, 0);
+
+    // Generate preview image
+    let path = Path::new(r"preview.png");
+    let file = File::create(path).unwrap();
+    let ref mut w = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(w, td.width as u32, td.height as u32); // Width is 2 pixels and height is 1.
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455)); // 1.0 / 2.2, scaled by 100000
+    encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2)); // 1.0 / 2.2, unscaled, but rounded
+    let source_chromaticities = png::SourceChromaticities::new(
+        // Using unscaled instantiation here
+        (0.31270, 0.32900),
+        (0.64000, 0.33000),
+        (0.30000, 0.60000),
+        (0.15000, 0.06000),
+    );
+    encoder.set_source_chromaticities(source_chromaticities);
+    let mut writer = encoder.write_header().unwrap();
+    let data: Vec<u8> = td
+        .framebuffer
+        .iter()
+        .flat_map(|row| row.iter())
+        .flat_map(|c| {
+            // data will be [RGBARGBA...]
+            if *c {
+                [0, 0, 0, 255]
+            } else {
+                [255, 255, 255, 255]
+            }
+        })
+        .collect();
+    writer.write_image_data(&data).unwrap();
+
+    let tcp_data = gen_tcp_data(&td)?;
+
+    if !dry_run {
+        print_tcp_data(device_ip, &tcp_data)
+    } else {
+        analyze_tcp_data(&tcp_data)?;
+        Ok(())
+    }
+}
+
+fn print_qr_text(text: &str, device_ip: &str, dry_run: bool) -> Result<()> {
+    println!("{:?}", text);
+    let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
+    let info = StatusRequest::send(&socket, device_ip)?;
+    let tape_width_px = if let PrinterStatus::SomeTape(t) = info {
+        println!("Tape is {:?}", t);
+        match t {
+            // -4mm will be the printable width...
+            TapeKind::W9 => 5 * 360 * 10 / 254,
+            TapeKind::W12 => 10 * 360 * 10 / 254,
+            TapeKind::W18 => 14 * 360 * 10 / 254, // verified
+            TapeKind::W24 => 20 * 360 * 10 / 254,
+            TapeKind::W36 => 26 * 360 * 10 / 254, // verified
+            _ => return Err(anyhow!("Failed to calc tape width. status: {:?}", info)),
+        }
+    } else {
+        return Err(anyhow!(
+            "Failed to determine tape width. status: {:?}",
+            info
+        ));
+    };
+    let tape_width_px = (tape_width_px + 7) / 8 * 8;
+
+    let qr_td = {
+        let mut td = TapeDisplay::new(tape_width_px, tape_width_px);
+        let tape_width_px = tape_width_px as u32;
+        let code = QrCode::new(&text).unwrap();
+        let image = code
+            .render::<Luma<u8>>()
+            .max_dimensions(tape_width_px, tape_width_px)
+            .build();
+        let ofs_x = (tape_width_px - image.width()) / 2;
+        let ofs_y = (tape_width_px - image.height()) / 2;
+        for (x, y, p) in image.enumerate_pixels() {
+            Rectangle::new(
+                Point::new((x + ofs_x) as i32, (y + ofs_y) as i32),
+                Size::new_equal(1),
+            )
+            .draw_styled(
+                &PrimitiveStyle::with_fill(BinaryColor::from(p.0[0] == 0)),
+                &mut td,
+            )?;
+        }
+        image.save("qrcode.png").unwrap();
+        td
+    };
+
+    let text_td = {
+        let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+        let text_len = text.len();
+        let mut td = TapeDisplay::new(10 * text_len, 20);
+        Text::with_alignment(
+            &text,
+            td.bounding_box().center() + Point::new(0, 10),
+            character_style,
+            Alignment::Center,
+        )
+        .draw(&mut td)?;
+        let r = tape_width_px / td.height;
+        td.scaled(r)
+    };
+
+    // Merge the components
+    let mut td = TapeDisplay::new(qr_td.width + text_td.width, tape_width_px);
+    td.overlay_or(&qr_td, 0, 0);
+    td.overlay_or(&text_td, qr_td.width, (tape_width_px - text_td.height) / 2);
+
+    // Generate preview image
+    let path = Path::new(r"preview.png");
+    let file = File::create(path).unwrap();
+    let ref mut w = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(w, td.width as u32, td.height as u32); // Width is 2 pixels and height is 1.
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455)); // 1.0 / 2.2, scaled by 100000
+    encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2)); // 1.0 / 2.2, unscaled, but rounded
+    let source_chromaticities = png::SourceChromaticities::new(
+        // Using unscaled instantiation here
+        (0.31270, 0.32900),
+        (0.64000, 0.33000),
+        (0.30000, 0.60000),
+        (0.15000, 0.06000),
+    );
+    encoder.set_source_chromaticities(source_chromaticities);
+    let mut writer = encoder.write_header().unwrap();
+    let data: Vec<u8> = td
+        .framebuffer
+        .iter()
+        .flat_map(|row| row.iter())
+        .flat_map(|c| {
+            // data will be [RGBARGBA...]
+            if *c {
+                [0, 0, 0, 255]
+            } else {
+                [255, 255, 255, 255]
+            }
+        })
+        .collect();
+    writer.write_image_data(&data).unwrap();
+
+    let tcp_data = gen_tcp_data(&td)?;
+
+    if !dry_run {
+        print_tcp_data(device_ip, &tcp_data)
+    } else {
+        analyze_tcp_data(&tcp_data)?;
+        Ok(())
+    }
+}
+
 pub fn do_print(args: PrintArgs) -> Result<()> {
     let device_ip = &args.printer;
-    match (args.mac_addr, args.tcp_data) {
-        (None, Some(tcp_data)) => {
-            let label_data = fs::read(tcp_data).context("Failed to read TCP data")?;
-            print_tcp_data(device_ip, &label_data)
-        }
-        (Some(mac_addr), None) => {
-            let text = mac_addr.to_uppercase().replace(":", "");
-            println!("{:?}", text);
-            let re = Regex::new(r"^[0-9A-Z]{12}$").unwrap();
-            if !re.is_match(&text) {
-                return Err(anyhow!("Invalid MAC Address: {mac_addr}"));
-            }
-            let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
-            let info = StatusRequest::send(&socket, device_ip)?;
-            let tape_width_px = if let PrinterStatus::SomeTape(t) = info {
-                println!("Tape is {:?}", t);
-                match t {
-                    // -4mm will be the printable width...
-                    TapeKind::W9 => 5 * 360 * 10 / 254,
-                    TapeKind::W12 => 10 * 360 * 10 / 254,
-                    TapeKind::W18 => 14 * 360 * 10 / 254, // verified
-                    TapeKind::W24 => 20 * 360 * 10 / 254,
-                    TapeKind::W36 => 26 * 360 * 10 / 254, // verified
-                    _ => return Err(anyhow!("Failed to calc tape width. status: {:?}", info)),
-                }
-            } else {
-                return Err(anyhow!(
-                    "Failed to determine tape width. status: {:?}",
-                    info
-                ));
-            };
-            let tape_width_px = (tape_width_px + 7) / 8 * 8;
-
-            let qr_td = {
-                let mut td = TapeDisplay::new(tape_width_px, tape_width_px);
-                let tape_width_px = tape_width_px as u32;
-                let code = QrCode::new(&text).unwrap();
-                let image = code
-                    .render::<Luma<u8>>()
-                    .max_dimensions(tape_width_px, tape_width_px)
-                    .build();
-                let ofs_x = (tape_width_px - image.width()) / 2;
-                let ofs_y = (tape_width_px - image.height()) / 2;
-                for (x, y, p) in image.enumerate_pixels() {
-                    Rectangle::new(
-                        Point::new((x + ofs_x) as i32, (y + ofs_y) as i32),
-                        Size::new_equal(1),
-                    )
-                    .draw_styled(
-                        &PrimitiveStyle::with_fill(BinaryColor::from(p.0[0] == 0)),
-                        &mut td,
-                    )?;
-                }
-                image.save("qrcode.png").unwrap();
-                td
-            };
-
-            let barcode = Code39::new(&text).context("Failed to generate a barcode")?;
-            let encoded: Vec<u8> = barcode.encode();
-            println!("{:?}", encoded);
-
-            let mac_td = {
-                let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
-                let text_len = text.len();
-                let mut td = TapeDisplay::new(10 * text_len, 20);
-                Text::with_alignment(
-                    &text,
-                    td.bounding_box().center() + Point::new(0, 10),
-                    character_style,
-                    Alignment::Center,
-                )
-                .draw(&mut td)?;
-                let td = td.rotated();
-                let r = qr_td.height / td.height;
-                td.scaled(r)
-            };
-
-            // Merge the components
-            let mut td = TapeDisplay::new(qr_td.width + mac_td.width, tape_width_px);
-            td.overlay_or(&mac_td, 0, 0);
-            td.overlay_or(&qr_td, mac_td.width, 0);
-
-            // Generate preview image
-            let path = Path::new(r"preview.png");
-            let file = File::create(path).unwrap();
-            let ref mut w = BufWriter::new(file);
-            let mut encoder = png::Encoder::new(w, td.width as u32, td.height as u32); // Width is 2 pixels and height is 1.
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Eight);
-            encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455)); // 1.0 / 2.2, scaled by 100000
-            encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2)); // 1.0 / 2.2, unscaled, but rounded
-            let source_chromaticities = png::SourceChromaticities::new(
-                // Using unscaled instantiation here
-                (0.31270, 0.32900),
-                (0.64000, 0.33000),
-                (0.30000, 0.60000),
-                (0.15000, 0.06000),
-            );
-            encoder.set_source_chromaticities(source_chromaticities);
-            let mut writer = encoder.write_header().unwrap();
-            let data: Vec<u8> = td
-                .framebuffer
-                .iter()
-                .flat_map(|row| row.iter())
-                .flat_map(|c| {
-                    // data will be [RGBARGBA...]
-                    if *c {
-                        [0, 0, 0, 255]
-                    } else {
-                        [255, 255, 255, 255]
-                    }
-                })
-                .collect();
-            writer.write_image_data(&data).unwrap();
-
-            let tcp_data = gen_tcp_data(&td)?;
-
-            if !args.dry_run {
-                print_tcp_data(device_ip, &tcp_data)
-            } else {
-                analyze_tcp_data(&tcp_data)?;
-                Ok(())
-            }
-        }
-        (_, _) => Err(anyhow!(
-            "Please specify one of following options: --tcp-data, --mac-addr"
-        )),
+    if let Some(tcp_data) = args.tcp_data {
+        let label_data = fs::read(tcp_data).context("Failed to read TCP data")?;
+        print_tcp_data(device_ip, &label_data)?;
     }
+    if let Some(mac_addr) = args.mac_addr {
+        print_mac_addr(&mac_addr, device_ip, args.dry_run)?;
+    }
+    if let Some(qr_text) = args.qr_text {
+        print_qr_text(&qr_text, device_ip, args.dry_run)?;
+    }
+    Ok(())
 }
