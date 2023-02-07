@@ -2,8 +2,13 @@
 
 A command-line interface for SR5900P tape printer.
 
+![](./assets/test_pattern.png)
+
 ```
-cargo run -- print --printer 10.10.10.31 --tcp-data sample_tcp_data/w18_hikalium.bin
+make test
+# preview.png will be generated
+PRINTER_IP=${YOUR_PRINTER_IP} make run
+# actual label will be printed on your printer!
 ```
 
 ## How to lookup the printer's IP
@@ -20,7 +25,7 @@ dns-sd -Gv4v6 SR5900PA28A76.local
 #  5:00:25.260  Add 40000002  7 SR5900PA28A76.local.                   10.10.10.31                                  120
 ```
 
-## How to extract TCP data
+## (for dev) How to extract TCP data
 ```
 # update these values to match with your env
 export IFACE=en0
