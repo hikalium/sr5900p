@@ -12,10 +12,10 @@ endif
 	cargo run -- print --printer ${PRINTER_IP} --test-pattern
 
 build_static:
-	cargo build --target x86_64-unknown-linux-gnu
+	RUSTFLAGS='-C target-feature=+crt-static' cargo build --target x86_64-unknown-linux-gnu
 
 install:
-	cargo install --path . --target x86_64-unknown-linux-gnu
+	cargo install --path .
 
 analyze:
 	cargo run -- analyze --tcp-data sample_tcp_data/w18_Aaa.bin
