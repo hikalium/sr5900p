@@ -3,6 +3,7 @@ build:
 
 test:
 	cargo run --release -- print --test-pattern --dry-run
+	diff preview.png assets/test_pattern.png && echo OK || { echo NG ; exit 1 ; }
 
 run:
 ifndef PRINTER_IP
