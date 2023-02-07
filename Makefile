@@ -1,3 +1,9 @@
+build:
+	cargo build --target x86_64-unknown-linux-gnu
+
+install:
+	cargo install --path . --target x86_64-unknown-linux-gnu
+
 analyze:
 	cargo run -- analyze --tcp-data sample_tcp_data/w18_Aaa.bin
 
