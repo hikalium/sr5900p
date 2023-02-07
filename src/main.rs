@@ -40,6 +40,6 @@ fn main() -> Result<()> {
     println!("{:?}", args);
     match args.nested {
         ArgsSubCommand::Analyze(args) => do_analyze(&args.tcp_data),
-        ArgsSubCommand::Print(args) => do_print(args),
+        ArgsSubCommand::Print(args) => do_print(&args),
     }
 }

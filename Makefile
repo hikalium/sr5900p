@@ -1,4 +1,16 @@
 build:
+	cargo build --release
+
+test:
+	cargo run --release -- print --test-pattern --dry-run
+
+run:
+ifndef PRINTER_IP
+	$(error Please set PRINTER_IP)
+endif
+	cargo run -- print --printer ${PRINTER_IP} --test-pattern
+
+build_static:
 	cargo build --target x86_64-unknown-linux-gnu
 
 install:
