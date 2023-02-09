@@ -415,7 +415,7 @@ fn determine_tape_width_px(args: &PrintArgs) -> Result<i32> {
 fn print_test_pattern(args: &PrintArgs) -> Result<()> {
     let tape_width_px = determine_tape_width_px(args)?;
     // td represents a tape segment
-    let mut td = TapeDisplay::new((tape_width_px * 2) as usize, tape_width_px as usize);
+    let mut td = TapeDisplay::new(mm_to_px(40.0) as usize, tape_width_px as usize);
     // 1mm outline
     Rectangle::new(
         Point::new(0, 0),
