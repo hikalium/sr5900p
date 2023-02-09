@@ -5,8 +5,10 @@ clippy:
 	cargo clippy
 
 test:
-	cargo run --release -- print --test-pattern --width 24 --dry-run
-	diff preview.png assets/test_pattern.png && echo OK || { echo NG ; exit 1 ; }
+	for w in 6 9 12 18 24 36 ; do \
+		cargo run --release -- print --test-pattern --width $${w} --dry-run && \
+		diff preview.png assets/test_pattern_$${w}mm.png && echo OK || { echo "FAIL: test_pattern $${w}mm" ; exit 1 ; } \
+	done
 
 commit: clippy test
 
