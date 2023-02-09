@@ -14,7 +14,7 @@ sr5900p print --dry-run --width 12 --test-pattern
 sr5900p print --dry-run --width 12 --qr-text 'Hello, world!'
 sr5900p print --dry-run --printer ${PRINTER_IP} --qr-text 'Hello, world!' # width auto detect
 
-PRINTER_IP=${YOUR_PRINTER_IP} make run
+export PRINTER_IP=${YOUR_PRINTER_IP}
 sr5900p print --printer ${PRINTER_IP} --test-pattern
 sr5900p print --printer ${PRINTER_IP} --qr-text 'Hello, world!'
 ```
