@@ -397,7 +397,7 @@ fn print_qr_text(args: &PrintArgs) -> Result<()> {
     let qr_td = {
         let mut td = TapeDisplay::new(tape_width_px, tape_width_px);
         let tape_width_px = tape_width_px as u32;
-        let code = QrCode::new(&text).unwrap();
+        let code = QrCode::new(text).unwrap();
         let image = code
             .render::<Luma<u8>>()
             .max_dimensions(tape_width_px, tape_width_px)
@@ -431,9 +431,9 @@ fn print_qr_text(args: &PrintArgs) -> Result<()> {
         Text::with_text_style(text, td.bounding_box().center(), character_style, ts)
             .draw(&mut td)?;
         // magnify the td as much as possible to fit the parent
-        td.scaled(r as usize)
+        td.scaled(r)
     };
-    let mut td = TapeDisplay::new(qr_td.width + text_td.width, tape_width_px as usize);
+    let mut td = TapeDisplay::new(qr_td.width + text_td.width, tape_width_px);
     td.overlay_or(&qr_td, 0, (td.height - qr_td.height) / 2);
     td.overlay_or(&text_td, qr_td.width, (td.height - text_td.height) / 2);
     print_td(args, &td)
@@ -473,7 +473,7 @@ fn print_td(args: &PrintArgs, td: &TapeDisplay) -> Result<()> {
         .collect();
     writer.write_image_data(&data).unwrap();
 
-    let tcp_data = gen_tcp_data(&td)?;
+    let tcp_data = gen_tcp_data(td)?;
 
     if !args.dry_run {
         print_tcp_data(
