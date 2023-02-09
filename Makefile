@@ -1,9 +1,14 @@
 build:
 	cargo build --release
 
+clippy:
+	cargo clippy
+
 test:
-	cargo run --release -- print --test-pattern --dry-run
+	cargo run --release -- print --test-pattern --width 24 --dry-run
 	diff preview.png assets/test_pattern.png && echo OK || { echo NG ; exit 1 ; }
+
+commit: clippy test
 
 run:
 ifndef PRINTER_IP

@@ -1,5 +1,5 @@
 use crate::PrinterStatus;
-use crate::TapeKind;
+use crate::Tape;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
@@ -105,13 +105,13 @@ impl StatusRequest {
                 0x06 => PrinterStatus::NoTape,
                 0x21 => PrinterStatus::CoverIsOpened,
                 0x00 => PrinterStatus::SomeTape(match data[0x03] {
-                    0x01 => TapeKind::W6,
-                    0x02 => TapeKind::W9,
-                    0x03 => TapeKind::W12,
-                    0x04 => TapeKind::W18,
-                    0x05 => TapeKind::W24,
-                    0x06 => TapeKind::W36,
-                    ti => TapeKind::UnknownTapeIndex(ti),
+                    0x01 => Tape::W6,
+                    0x02 => Tape::W9,
+                    0x03 => Tape::W12,
+                    0x04 => Tape::W18,
+                    0x05 => Tape::W24,
+                    0x06 => Tape::W36,
+                    ti => return Err(anyhow!("Unknow tape index {ti:#04X}")),
                 }),
                 _ => PrinterStatus::Unknown(res_header, data),
             },

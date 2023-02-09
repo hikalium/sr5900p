@@ -5,7 +5,7 @@ use crate::protocol::StartPrintRequest;
 use crate::protocol::StatusRequest;
 use crate::protocol::StopPrintRequest;
 use crate::PrinterStatus;
-use crate::TapeKind;
+use crate::Tape;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
@@ -39,29 +39,12 @@ use std::path::Path;
 use std::thread;
 use std::time;
 
-#[derive(FromArgs, PartialEq, Debug)]
-/// Print something
-#[argh(subcommand, name = "print")]
-pub struct PrintArgs {
-    /// generate a label for a mac addr
-    #[argh(option)]
-    mac_addr: Option<String>,
-    /// generate a label for a QR code with text
-    #[argh(option)]
-    qr_text: Option<String>,
-    /// do not print (just generate and analyze)
-    #[argh(switch)]
-    dry_run: bool,
-    /// the raw dump of the TCP stream while printing
-    #[argh(option)]
-    tcp_data: Option<String>,
-    /// print a test pattern
-    #[argh(switch)]
-    test_pattern: bool,
-    /// an IPv4 address for the printer
-    #[argh(option)]
-    printer: Option<String>,
+pub fn mm_to_px(mm: f32) -> i32 {
+    const DPI: f32 = 360.0;
+    const MM_TO_INCH: f32 = 10.0 / 254.0;
+    (mm * DPI * MM_TO_INCH).floor() as i32
 }
+
 fn print_tcp_data(device_ip: &str, data: &[u8]) -> Result<()> {
     let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
     let info = StatusRequest::send(&socket, device_ip)?;
@@ -158,11 +141,11 @@ fn print_mac_addr(mac_addr: &str, device_ip: &str, dry_run: bool) -> Result<()> 
         println!("Tape is {:?}", t);
         match t {
             // -4mm will be the printable width...
-            TapeKind::W9 => 5 * 360 * 10 / 254,
-            TapeKind::W12 => 10 * 360 * 10 / 254,
-            TapeKind::W18 => 14 * 360 * 10 / 254, // verified
-            TapeKind::W24 => 20 * 360 * 10 / 254,
-            TapeKind::W36 => 26 * 360 * 10 / 254, // verified
+            Tape::W9 => 5 * 360 * 10 / 254,
+            Tape::W12 => 10 * 360 * 10 / 254,
+            Tape::W18 => 14 * 360 * 10 / 254, // verified
+            Tape::W24 => 20 * 360 * 10 / 254,
+            Tape::W36 => 26 * 360 * 10 / 254, // verified
             _ => return Err(anyhow!("Failed to calc tape width. status: {:?}", info)),
         }
     } else {
@@ -273,11 +256,11 @@ fn print_qr_text(text: &str, device_ip: &str, dry_run: bool) -> Result<()> {
         println!("Tape is {:?}", t);
         match t {
             // -4mm will be the printable width...
-            TapeKind::W9 => 5 * 360 * 10 / 254,
-            TapeKind::W12 => 10 * 360 * 10 / 254,
-            TapeKind::W18 => 14 * 360 * 10 / 254, // verified
-            TapeKind::W24 => 20 * 360 * 10 / 254,
-            TapeKind::W36 => 26 * 360 * 10 / 254, // verified
+            Tape::W9 => 5 * 360 * 10 / 254,
+            Tape::W12 => 10 * 360 * 10 / 254,
+            Tape::W18 => 14 * 360 * 10 / 254, // verified
+            Tape::W24 => 20 * 360 * 10 / 254,
+            Tape::W36 => 26 * 360 * 10 / 254, // verified
             _ => return Err(anyhow!("Failed to calc tape width. status: {:?}", info)),
         }
     } else {
@@ -375,42 +358,37 @@ fn print_qr_text(text: &str, device_ip: &str, dry_run: bool) -> Result<()> {
     }
 }
 */
-fn mm_to_px(mm: f32) -> i32 {
-    const DPI: f32 = 360.0;
-    const MM_TO_INCH: f32 = 10.0 / 254.0;
-    (mm * DPI * MM_TO_INCH).floor() as i32
-}
-fn tape_width_px(kind: &TapeKind) -> Result<i32> {
-    let w = match kind {
-        TapeKind::W6 => 5.0, // verified
-        TapeKind::W9 => 7.0, // verified
-        TapeKind::W12 => 10.0,
-        TapeKind::W18 => 15.2, // verified
-        TapeKind::W24 => 20.0, // verified
-        TapeKind::W36 => 26.0, // verified
-        _ => return Err(anyhow!("Failed to detect tape width. status: {:?}", kind)),
-    };
-    let w = mm_to_px(w);
-    let w = (w + 7) / 8 * 8;
-    // tape width in px should be multiple of 8
-    Ok(w)
-}
 
 fn determine_tape_width_px(args: &PrintArgs) -> Result<i32> {
-    if let Some(printer) = &args.printer {
+    let detected = if let Some(printer) = &args.printer {
         let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
         let info = StatusRequest::send(&socket, printer)?;
+        eprintln!("Tape detected: {:?}", info);
         if let PrinterStatus::SomeTape(t) = info {
-            println!("Tape detected: {:?}", t);
-            let t = tape_width_px(&t)?;
-            Ok(t)
+            Some(t)
         } else {
-            Err(anyhow!("Failed to detect tape width. status: {:?}", info))
+            eprintln!("Failed to detect tape width. status: {:?}", info);
+            None
         }
     } else {
-        let t = tape_width_px(&TapeKind::W24)?;
-        Ok(t)
+        None
+    };
+    let given = if let Some(mm) = args.width {
+        Some(Tape::from_mm(mm)?)
+    } else {
+        None
+    };
+    Ok(match (given, detected) {
+        (None, Some(w)) | (Some(w), None) => w,
+        (Some(given), Some(detected)) => {
+            if given != detected {
+                eprintln!("Warning: {given:?} does not match with detected {detected:?}")
+            }
+            given
+        }
+        (None, None) => return Err(anyhow!("Please specify --width or --printer")),
     }
+    .width_px())
 }
 
 fn print_test_pattern(args: &PrintArgs) -> Result<()> {
@@ -557,6 +535,32 @@ fn print_test_pattern(args: &PrintArgs) -> Result<()> {
     }
 }
 
+#[derive(FromArgs, PartialEq, Debug)]
+/// Print something
+#[argh(subcommand, name = "print")]
+pub struct PrintArgs {
+    /// generate a label for a mac addr
+    #[argh(option)]
+    mac_addr: Option<String>,
+    /// generate a label for a QR code with text
+    #[argh(option)]
+    qr_text: Option<String>,
+    /// tape width in mm (default: auto)
+    #[argh(option)]
+    width: Option<usize>,
+    /// do not print (just generate and analyze)
+    #[argh(switch)]
+    dry_run: bool,
+    /// the raw dump of the TCP stream while printing
+    #[argh(option)]
+    tcp_data: Option<String>,
+    /// print a test pattern
+    #[argh(switch)]
+    test_pattern: bool,
+    /// an IPv4 address for the printer
+    #[argh(option)]
+    printer: Option<String>,
+}
 pub fn do_print(args: &PrintArgs) -> Result<()> {
     if args.test_pattern {
         print_test_pattern(args)
