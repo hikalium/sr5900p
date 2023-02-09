@@ -25,8 +25,8 @@ use embedded_graphics::text::Baseline;
 use embedded_graphics::text::Text;
 use embedded_graphics::text::TextStyleBuilder;
 use embedded_graphics::Drawable;
-//use image::Luma;
-//use qrcode::QrCode;
+use image::Luma;
+use qrcode::QrCode;
 //use regex::Regex;
 //use std::fs;
 use std::fs::File;
@@ -391,6 +391,101 @@ fn determine_tape_width_px(args: &PrintArgs) -> Result<i32> {
     .width_px())
 }
 
+fn print_qr_text(args: &PrintArgs) -> Result<()> {
+    let text = args.qr_text.as_ref().expect("Please specify --qr-text");
+    let tape_width_px = determine_tape_width_px(args)? as usize;
+    let qr_td = {
+        let mut td = TapeDisplay::new(tape_width_px, tape_width_px);
+        let tape_width_px = tape_width_px as u32;
+        let code = QrCode::new(&text).unwrap();
+        let image = code
+            .render::<Luma<u8>>()
+            .max_dimensions(tape_width_px, tape_width_px)
+            .build();
+        let ofs_x = (tape_width_px - image.width()) / 2;
+        let ofs_y = (tape_width_px - image.height()) / 2;
+        for (x, y, p) in image.enumerate_pixels() {
+            Rectangle::new(
+                Point::new((x + ofs_x) as i32, (y + ofs_y) as i32),
+                Size::new_equal(1),
+            )
+            .draw_styled(
+                &PrimitiveStyle::with_fill(BinaryColor::from(p.0[0] == 0)),
+                &mut td,
+            )?;
+        }
+        image.save("qrcode.png").unwrap();
+        td
+    };
+    let text_td = {
+        let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+        let text_len = text.len();
+        let margin_px = 4usize;
+        let r = tape_width_px / (20 + margin_px);
+        let mut td = TapeDisplay::new(10 * text_len + margin_px, 20 + margin_px);
+        let tb = TextStyleBuilder::new();
+        let ts = tb
+            .alignment(Alignment::Center)
+            .baseline(Baseline::Middle)
+            .build();
+        Text::with_text_style(text, td.bounding_box().center(), character_style, ts)
+            .draw(&mut td)?;
+        // magnify the td as much as possible to fit the parent
+        td.scaled(r as usize)
+    };
+    let mut td = TapeDisplay::new(qr_td.width + text_td.width, tape_width_px as usize);
+    td.overlay_or(&qr_td, 0, (td.height - qr_td.height) / 2);
+    td.overlay_or(&text_td, qr_td.width, (td.height - text_td.height) / 2);
+    print_td(args, &td)
+}
+
+fn print_td(args: &PrintArgs, td: &TapeDisplay) -> Result<()> {
+    // Generate preview image
+    let path = Path::new(r"preview.png");
+    let file = File::create(path).unwrap();
+    let w = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(w, td.width as u32, td.height as u32); // Width is 2 pixels and height is 1.
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455)); // 1.0 / 2.2, scaled by 100000
+    encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2)); // 1.0 / 2.2, unscaled, but rounded
+    let source_chromaticities = png::SourceChromaticities::new(
+        // Using unscaled instantiation here
+        (0.31270, 0.32900),
+        (0.64000, 0.33000),
+        (0.30000, 0.60000),
+        (0.15000, 0.06000),
+    );
+    encoder.set_source_chromaticities(source_chromaticities);
+    let mut writer = encoder.write_header().unwrap();
+    let data: Vec<u8> = td
+        .framebuffer
+        .iter()
+        .flat_map(|row| row.iter())
+        .flat_map(|c| {
+            // data will be [RGBARGBA...]
+            if *c {
+                [0, 0, 0, 255]
+            } else {
+                [255, 255, 255, 255]
+            }
+        })
+        .collect();
+    writer.write_image_data(&data).unwrap();
+
+    let tcp_data = gen_tcp_data(&td)?;
+
+    if !args.dry_run {
+        print_tcp_data(
+            args.printer.as_ref().context("Please specify --printer")?,
+            &tcp_data,
+        )
+    } else {
+        analyze_tcp_data(&tcp_data)?;
+        Ok(())
+    }
+}
+
 fn print_test_pattern(args: &PrintArgs) -> Result<()> {
     let tape_width_px = determine_tape_width_px(args)?;
     // td represents a tape segment
@@ -488,51 +583,7 @@ fn print_test_pattern(args: &PrintArgs) -> Result<()> {
         (td.width - text_td.width) / 2,
         (td.height - text_td.height) / 2,
     );
-
-    // Generate preview image
-    let path = Path::new(r"preview.png");
-    let file = File::create(path).unwrap();
-    let w = BufWriter::new(file);
-    let mut encoder = png::Encoder::new(w, td.width as u32, td.height as u32); // Width is 2 pixels and height is 1.
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_source_gamma(png::ScaledFloat::from_scaled(45455)); // 1.0 / 2.2, scaled by 100000
-    encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2)); // 1.0 / 2.2, unscaled, but rounded
-    let source_chromaticities = png::SourceChromaticities::new(
-        // Using unscaled instantiation here
-        (0.31270, 0.32900),
-        (0.64000, 0.33000),
-        (0.30000, 0.60000),
-        (0.15000, 0.06000),
-    );
-    encoder.set_source_chromaticities(source_chromaticities);
-    let mut writer = encoder.write_header().unwrap();
-    let data: Vec<u8> = td
-        .framebuffer
-        .iter()
-        .flat_map(|row| row.iter())
-        .flat_map(|c| {
-            // data will be [RGBARGBA...]
-            if *c {
-                [0, 0, 0, 255]
-            } else {
-                [255, 255, 255, 255]
-            }
-        })
-        .collect();
-    writer.write_image_data(&data).unwrap();
-
-    let tcp_data = gen_tcp_data(&td)?;
-
-    if !args.dry_run {
-        print_tcp_data(
-            args.printer.as_ref().context("Please specify --printer")?,
-            &tcp_data,
-        )
-    } else {
-        analyze_tcp_data(&tcp_data)?;
-        Ok(())
-    }
+    print_td(args, &td)
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
@@ -564,6 +615,8 @@ pub struct PrintArgs {
 pub fn do_print(args: &PrintArgs) -> Result<()> {
     if args.test_pattern {
         print_test_pattern(args)
+    } else if args.qr_text.is_some() {
+        print_qr_text(args)
     } else {
         Err(anyhow!("Please specify a print command"))
     }

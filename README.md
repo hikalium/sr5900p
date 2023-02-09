@@ -3,6 +3,7 @@
 A command-line interface for SR5900P tape printer.
 
 ![](./assets/test_pattern_18mm.png)
+![](./assets/qr_text_18mm.png)
 
 ```
 make test
