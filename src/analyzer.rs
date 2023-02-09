@@ -57,7 +57,7 @@ pub fn analyze_tcp_data(data: &[u8]) -> Result<()> {
                     for byte in img_data {
                         print!("{byte:08b}");
                     }
-                    print!("\n");
+                    println!();
                     i += 8 + bytes;
                     num_data_rows += 1;
                 }

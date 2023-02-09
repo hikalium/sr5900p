@@ -46,8 +46,7 @@ impl TapeDisplay {
                 self.framebuffer[y][x] |= td
                     .framebuffer
                     .get(y - py)
-                    .map(|r| r.get(x - px))
-                    .flatten()
+                    .and_then(|r| r.get(x - px))
                     .unwrap_or(&false);
             }
         }
@@ -56,12 +55,11 @@ impl TapeDisplay {
         *self
             .framebuffer
             .get(y)
-            .map(|r| r.get(x))
-            .flatten()
+            .and_then(|r| r.get(x))
             .unwrap_or(&false)
     }
     pub fn set_pixel(&mut self, x: usize, y: usize, value: bool) {
-        if let Some(v) = self.framebuffer.get_mut(y).map(|r| r.get_mut(x)).flatten() {
+        if let Some(v) = self.framebuffer.get_mut(y).and_then(|r| r.get_mut(x)) {
             *v = value
         }
     }

@@ -10,7 +10,7 @@ use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use argh::FromArgs;
-use barcoders::sym::code39::Code39;
+//use barcoders::sym::code39::Code39;
 use embedded_graphics::geometry::Dimensions;
 use embedded_graphics::geometry::Point;
 use embedded_graphics::mono_font::ascii::FONT_10X20;
@@ -25,10 +25,10 @@ use embedded_graphics::text::Baseline;
 use embedded_graphics::text::Text;
 use embedded_graphics::text::TextStyleBuilder;
 use embedded_graphics::Drawable;
-use image::Luma;
-use qrcode::QrCode;
-use regex::Regex;
-use std::fs;
+//use image::Luma;
+//use qrcode::QrCode;
+//use regex::Regex;
+//use std::fs;
 use std::fs::File;
 use std::io::prelude::Write;
 use std::io::BufWriter;
@@ -78,7 +78,7 @@ fn print_tcp_data(device_ip: &str, data: &[u8]) -> Result<()> {
     thread::sleep(time::Duration::from_millis(500));
     notify_data_stream(&socket, device_ip)?;
     thread::sleep(time::Duration::from_millis(500));
-    stream.write(&data)?;
+    stream.write_all(data)?;
 
     println!("Print data is sent. Waiting...");
     loop {
@@ -133,7 +133,7 @@ fn gen_tcp_data(td: &TapeDisplay) -> Result<Vec<u8>> {
                 let x = xb * 8 + (7 - dx);
 
                 if td.get_pixel(td.width - 1 - y, x) {
-                    chunk = chunk | (1 << dx)
+                    chunk |= 1 << dx
                 }
             }
             tcp_data.push(chunk);
@@ -382,10 +382,11 @@ fn mm_to_px(mm: f32) -> i32 {
 }
 fn tape_width_px(kind: &TapeKind) -> Result<i32> {
     let w = match kind {
-        TapeKind::W9 => 5.0,
+        TapeKind::W6 => 5.0, // verified
+        TapeKind::W9 => 7.0, // verified
         TapeKind::W12 => 10.0,
         TapeKind::W18 => 15.2, // verified
-        TapeKind::W24 => 20.0,
+        TapeKind::W24 => 20.0, // verified
         TapeKind::W36 => 26.0, // verified
         _ => return Err(anyhow!("Failed to detect tape width. status: {:?}", kind)),
     };
@@ -398,7 +399,7 @@ fn tape_width_px(kind: &TapeKind) -> Result<i32> {
 fn determine_tape_width_px(args: &PrintArgs) -> Result<i32> {
     if let Some(printer) = &args.printer {
         let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind")?;
-        let info = StatusRequest::send(&socket, &printer)?;
+        let info = StatusRequest::send(&socket, printer)?;
         if let PrinterStatus::SomeTape(t) = info {
             println!("Tape detected: {:?}", t);
             let t = tape_width_px(&t)?;
@@ -486,8 +487,8 @@ fn print_test_pattern(args: &PrintArgs) -> Result<()> {
         Rectangle::new(
             Point::new(1, 1),
             Size {
-                width: td.width as u32 - 2 as u32,
-                height: td.height as u32 - 2 as u32,
+                width: td.width as u32 - 2,
+                height: td.height as u32 - 2,
             },
         )
         .draw_styled(
@@ -499,7 +500,7 @@ fn print_test_pattern(args: &PrintArgs) -> Result<()> {
             .alignment(Alignment::Center)
             .baseline(Baseline::Middle)
             .build();
-        Text::with_text_style(&text, td.bounding_box().center(), character_style, ts)
+        Text::with_text_style(text, td.bounding_box().center(), character_style, ts)
             .draw(&mut td)?;
         // magnify the td as much as possible to fit the parent
         td.scaled(r as usize)
@@ -513,7 +514,7 @@ fn print_test_pattern(args: &PrintArgs) -> Result<()> {
     // Generate preview image
     let path = Path::new(r"preview.png");
     let file = File::create(path).unwrap();
-    let ref mut w = BufWriter::new(file);
+    let w = BufWriter::new(file);
     let mut encoder = png::Encoder::new(w, td.width as u32, td.height as u32); // Width is 2 pixels and height is 1.
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
@@ -558,7 +559,7 @@ fn print_test_pattern(args: &PrintArgs) -> Result<()> {
 
 pub fn do_print(args: &PrintArgs) -> Result<()> {
     if args.test_pattern {
-        print_test_pattern(&args)
+        print_test_pattern(args)
     } else {
         Err(anyhow!("Please specify a print command"))
     }

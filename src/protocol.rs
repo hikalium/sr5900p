@@ -194,16 +194,7 @@ pub fn notify_data_stream(socket: &UdpSocket, device_ip: &str) -> Result<()> {
     socket
         .send_to(&req.copy_into_slice(), device_ip.to_string() + ":9100")
         .context("failed to send")?;
-    let (len, _) = socket.recv_from(&mut buf)?;
-    let res_header = PacketHeader::copy_from_slice(&buf[0..len])?;
-    let data = &buf[size_of::<PacketHeader>()..len];
-    if data.len() != 0 {
-        return Err(anyhow!(
-            "Invalid response for cmd 0101: {:?}, data: {:?}",
-            res_header,
-            data
-        ));
-    }
+    socket.recv_from(&mut buf)?;
 
     let req = PacketHeader::new_request(0x0100, 0);
     socket
