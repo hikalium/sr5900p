@@ -4,16 +4,18 @@ build:
 clippy:
 	cargo clippy -- -D warnings
 
-TAPE_TO_TEST=6 9 12 18 24 36
+TAPE_TO_TEST=4 6 9 12 18 24 36
 
 test:
 	for w in $(TAPE_TO_TEST) ; do \
 		cargo run --release -- print --test-pattern --width $${w} --dry-run && \
-		diff preview.png assets/test_pattern_$${w}mm.png && echo OK || { echo "FAIL: test_pattern $${w}mm" ; exit 1 ; } \
+		diff preview.png assets/test_pattern_$${w}mm.png && \
+		echo OK || { echo "FAIL: test_pattern $${w}mm" ; exit 1 ; } \
 	done
 	for w in $(TAPE_TO_TEST) ; do \
 		cargo run --release -- print --qr-text "Hello, world!" --width $${w} --dry-run && \
-		diff preview.png assets/qr_text_$${w}mm.png && echo OK || { echo "FAIL: qr_text $${w}mm" ; exit 1 ; } \
+		diff preview.png assets/qr_text_$${w}mm.png && \
+		echo OK || { echo "FAIL: qr_text $${w}mm" ; exit 1 ; } \
 	done
 
 commit: clippy test

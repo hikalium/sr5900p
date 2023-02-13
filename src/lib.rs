@@ -13,6 +13,7 @@ use anyhow::Result;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Tape {
+    W4,
     W6,
     W9,
     W12,
@@ -23,6 +24,7 @@ pub enum Tape {
 impl Tape {
     pub fn from_mm(mm: usize) -> Result<Self> {
         Ok(match mm {
+            4 => Tape::W4,
             6 => Tape::W6,
             9 => Tape::W9,
             12 => Tape::W12,
@@ -34,9 +36,10 @@ impl Tape {
     }
     fn width_px(&self) -> i32 {
         let w = match self {
-            Tape::W6 => 5.0, // verified
-            Tape::W9 => 7.0, // verified
-            Tape::W12 => 10.0,
+            Tape::W4 => 2.85,  // verified
+            Tape::W6 => 5.0,   // verified
+            Tape::W9 => 7.0,   // verified
+            Tape::W12 => 10.0, // verified
             Tape::W18 => 15.2, // verified
             Tape::W24 => 20.0, // verified
             Tape::W36 => 26.0, // verified

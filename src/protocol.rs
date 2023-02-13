@@ -111,6 +111,7 @@ impl StatusRequest {
                     0x04 => Tape::W18,
                     0x05 => Tape::W24,
                     0x06 => Tape::W36,
+                    0x0B => Tape::W4,
                     ti => return Err(anyhow!("Unknow tape index {ti:#04X}")),
                 }),
                 _ => PrinterStatus::Unknown(res_header, data),
