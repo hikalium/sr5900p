@@ -439,6 +439,55 @@ fn print_qr_text(args: &PrintArgs) -> Result<()> {
     print_td(args, &td)
 }
 
+fn print_qr_text_small(args: &PrintArgs) -> Result<()> {
+    let text = args.qr_text_small.as_ref().expect("Please specify --qr-text-small");
+    let tape_width_px = determine_tape_width_px(args)? as usize;
+    let qr_td = {
+        let mut td = TapeDisplay::new(tape_width_px, tape_width_px);
+        let tape_width_px = tape_width_px as u32;
+        let code = QrCode::new(text).unwrap();
+        let image = code
+            .render::<Luma<u8>>()
+            .max_dimensions(tape_width_px, tape_width_px)
+            .build();
+        let ofs_x = (tape_width_px - image.width()) / 2;
+        let ofs_y = (tape_width_px - image.height()) / 2;
+        for (x, y, p) in image.enumerate_pixels() {
+            Rectangle::new(
+                Point::new((x + ofs_x) as i32, (y + ofs_y) as i32),
+                Size::new_equal(1),
+            )
+            .draw_styled(
+                &PrimitiveStyle::with_fill(BinaryColor::from(p.0[0] == 0)),
+                &mut td,
+            )?;
+        }
+        image.save("qrcode.png").unwrap();
+        td
+    };
+    let text_td = {
+        let character_style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+        let text_len = text.len();
+        let margin_px = 4usize;
+        let text_width = 10 * text_len + margin_px;
+        let r = std::cmp::min(tape_width_px / text_width, 4);
+        let mut td = TapeDisplay::new(text_width, 20+margin_px);
+        let tb = TextStyleBuilder::new();
+        let ts = tb
+            .alignment(Alignment::Center)
+            .baseline(Baseline::Middle)
+            .build();
+        Text::with_text_style(text, td.bounding_box().center(), character_style, ts)
+            .draw(&mut td)?;
+        // magnify the td as much as possible to fit the parent
+        td.rotated().scaled(r)
+    };
+    let mut td = TapeDisplay::new(qr_td.width + text_td.width, tape_width_px);
+    td.overlay_or(&qr_td, 0, (td.height - qr_td.height) / 2);
+    td.overlay_or(&text_td, qr_td.width, (td.height - text_td.height)/2);
+    print_td(args, &td)
+}
+
 fn print_td(args: &PrintArgs, td: &TapeDisplay) -> Result<()> {
     // Generate preview image
     let path = Path::new(r"preview.png");
@@ -596,6 +645,9 @@ pub struct PrintArgs {
     /// generate a label for a QR code with text
     #[argh(option)]
     qr_text: Option<String>,
+    /// generate a label for a QR code with text
+    #[argh(option)]
+    qr_text_small: Option<String>,
     /// tape width in mm (default: auto)
     #[argh(option)]
     width: Option<usize>,
@@ -617,6 +669,8 @@ pub fn do_print(args: &PrintArgs) -> Result<()> {
         print_test_pattern(args)
     } else if args.qr_text.is_some() {
         print_qr_text(args)
+    } else if args.qr_text_small.is_some() {
+        print_qr_text_small(args)
     } else {
         Err(anyhow!("Please specify a print command"))
     }
